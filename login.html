@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>登入</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.4/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="min-h-screen bg-slate-50 grid place-items-center">
+  <div class="bg-white rounded-2xl shadow p-8 w-full max-w-md">
+    <h1 class="text-2xl font-semibold mb-4 text-center">登入</h1>
+    {% if error %}
+      <div class="bg-rose-100 text-rose-700 px-3 py-2 mb-3 rounded">{{ error }}</div>
+    {% endif %}
+    <form method="post" class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium">電子郵件</label>
+        <input name="email" type="email" class="w-full border rounded-lg px-3 py-2 mt-1" required>
+      </div>
+      <div>
+        <label class="block text-sm font-medium">密碼</label>
+        <input name="password" type="password" class="w-full border rounded-lg px-3 py-2 mt-1" required>
+      </div>
+      <button type="submit" class="w-full bg-indigo-600 text-white py-2 rounded-lg hover:bg-indigo-700">登入</button>
+    </form>
+  </div>
+</body>
+</html>

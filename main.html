@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>결산화면 · main</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.4/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    .btn { padding:.25rem .5rem; border:1px solid #cbd5e1; border-radius:.5rem; }
+    table { border-collapse:collapse; width:100%; }
+    th,td { border:1px solid #e2e8f0; padding:.5rem; text-align:center; }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-50 p-6">
+  <header class="flex justify-between items-center max-w-6xl mx-auto mb-4">
+    <h1 class="text-2xl font-bold">결산화면</h1>
+    <nav class="flex items-center gap-3">
+      <a href="/prices/admin" class="text-indigo-600 hover:underline">가격표 편집</a>
+      <a href="/logout" class="text-rose-600 hover:underline">로그아웃</a>
+    </nav>
+  </header>
+
+  <!-- 主區：左 80% + 右 20% -->
+  <div class="max-w-6xl mx-auto grid grid-cols-5 gap-4">
+    <!-- 左：主表（占 4/5） -->
+    <div class="col-span-5 lg:col-span-4">
+      <div class="bg-white rounded-2xl shadow p-4">
+        <table>
+          <thead class="bg-slate-100">
+            <tr>
+              <th>제품명</th>
+              <th>단가</th>
+              <th>카드</th>
+              <th>현금</th>
+              <th>이체</th>
+            </tr>
+          </thead>
+          <tbody id="productBody"></tbody>
+          <tfoot class="bg-slate-50 font-semibold">
+            <tr>
+              <td colspan="2" class="text-right pr-4">소계：</td>
+              <td id="sumCard">0</td>
+              <td id="sumCash">0</td>
+              <td id="sumTrans">0</td>
+            </tr>
+            <tr class="bg-indigo-50 text-indigo-800">
+              <td colspan="2" class="text-right pr-4">총합계：</td>
+              <td colspan="3" id="sumTotal">0</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+
+    <!-- 右：20% 寬度（金額 × 現金/銀行） -->
+    <aside class="col-span-5 lg:col-span-1">
+      <div class="bg-white rounded-2xl shadow p-4 lg:sticky lg:top-4">
+        <h2 class="text-lg font-semibold mb-3">금액 분배</h2>
+        <div class="overflow-x-auto">
+          <table>
+            <thead class="bg-slate-100">
+              <tr>
+                <th style="width:30%"></th>
+                <th>현금</th>
+                <th>은행</th>
+              </tr>
+            </thead>
+            <tbody id="denomBody"></tbody>
+            <tfoot class="bg-slate-50 font-semibold">
+              <tr>
+                <td class="text-right pr-2">소계</td>
+                <td id="cashSum">0</td>
+                <td id="bankSum">0</td>
+              </tr>
+              <tr class="bg-indigo-50 text-indigo-800">
+                <td class="text-right pr-2">합계</td>
+                <td colspan="2" id="cashBankTotal">0</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <p class="text-xs text-slate-500 mt-2">좌측은 금액(₩). 각 칸: 수량 × 금액 = 소계.</p>
+      </div>
+    </aside>
+  </div>
+
+  <!-- 底部：정산 按鈕 -->
+  <div class="max-w-6xl mx-auto mt-6 text-right">
+    <button id="goSettlement"
+            class="px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700">
+      정산
+    </button>
+  </div>
+
+  <script>
+    // ---------- 左表（카드/현금/이체） ----------
+    const productBody = document.getElementById("productBody");
+    const sumCardEl = document.getElementById("sumCard");
+    const sumCashEl = document.getElementById("sumCash");
+    const sumTransEl = document.getElementById("sumTrans");
+    const sumTotalEl = document.getElementById("sumTotal");
+    let products = [];
+
+    async function loadPrices(){
+      try{
+        const res = await fetch("/prices");
+        const data = await res.json();
+        products = data.slice(0,10).map(p=>({
+          id: p.id,
+          name: p.name || `제품${p.id}`,
+          price: Number(p.price)||50000,
+          qtyCard:0, qtyCash:0, qtyTrans:0
+        }));
+        renderProducts();
+      }catch(e){
+        alert("가격표를 불러올 수 없습니다. 로그인 상태를 확인하세요.");
+        console.error(e);
+      }
+    }
+
+    function renderProducts(){
+      productBody.innerHTML = "";
+      products.forEach(p=>{
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="font-medium">${p.name}</td>
+          <td>${p.price.toLocaleString()}</td>
+          <td>${renderPayCell(p,"Card")}</td>
+          <td>${renderPayCell(p,"Cash")}</td>
+          <td>${renderPayCell(p,"Trans")}</td>
+        `;
+        productBody.appendChild(tr);
+      });
+      updatePaySums();
+    }
+
+    function renderPayCell(p, type){
+      const qty = p["qty"+type];
+      return `
+        <div class="flex items-center justify-center gap-1">
+          <button class="btn" data-kind="pay" data-act="dec" data-id="${p.id}" data-type="${type}">－</button>
+          <span class="min-w-[2rem]">${qty}</span>
+          <button class="btn" data-kind="pay" data-act="inc" data-id="${p.id}" data-type="${type}">＋</button>
+        </div>
+      `;
+    }
+
+    function updatePaySums(){
+      const sums = { Card:0, Cash:0, Trans:0 };
+      products.forEach(p=>{
+        sums.Card  += p.qtyCard  * p.price;
+        sums.Cash  += p.qtyCash  * p.price;
+        sums.Trans += p.qtyTrans * p.price;
+      });
+      sumCardEl.textContent  = sums.Card.toLocaleString();
+      sumCashEl.textContent  = sums.Cash.toLocaleString();
+      sumTransEl.textContent = sums.Trans.toLocaleString();
+      sumTotalEl.textContent = (sums.Card + sums.Cash + sums.Trans).toLocaleString();
+    }
+
+    // ---------- 右表（面額 × 現金/銀行） ----------
+    const denomBody = document.getElementById("denomBody");
+    const cashSumEl = document.getElementById("cashSum");
+    const bankSumEl = document.getElementById("bankSum");
+    const cashBankTotalEl = document.getElementById("cashBankTotal");
+
+    const DENOMS = [500, 1000, 2000, 4000, 5000, 10000];
+    let denomRows = DENOMS.map(v => ({ value: v, cashQty: 0, bankQty: 0 }));
+
+    function renderDenoms(){
+      denomBody.innerHTML = "";
+      denomRows.forEach(row=>{
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="font-medium">${row.value.toLocaleString()}</td>
+          <td>
+            <div class="flex items-center justify-center gap-1">
+              <button class="btn" data-kind="denom" data-target="cash" data-act="dec" data-val="${row.value}">－</button>
+              <span class="min-w-[2rem]">${row.cashQty}</span>
+              <button class="btn" data-kind="denom" data-target="cash" data-act="inc" data-val="${row.value}">＋</button>
+            </div>
+          </td>
+          <td>
+            <div class="flex items-center justify-center gap-1">
+              <button class="btn" data-kind="denom" data-target="bank" data-act="dec" data-val="${row.value}">－</button>
+              <span class="min-w-[2rem]">${row.bankQty}</span>
+              <button class="btn" data-kind="denom" data-target="bank" data-act="inc" data-val="${row.value}">＋</button>
+            </div>
+          </td>
+        `;
+        denomBody.appendChild(tr);
+      });
+      updateDenomSums();
+    }
+
+    function updateDenomSums(){
+      const cashSum = denomRows.reduce((s, r) => s + r.cashQty * r.value, 0);
+      const bankSum = denomRows.reduce((s, r) => s + r.bankQty * r.value, 0);
+      cashSumEl.textContent = cashSum.toLocaleString();
+      bankSumEl.textContent = bankSum.toLocaleString();
+      cashBankTotalEl.textContent = (cashSum + bankSum).toLocaleString();
+    }
+
+    // ---------- 共用事件 ----------
+    document.addEventListener("click", e=>{
+      const btn = e.target.closest("button");
+      if(!btn) return;
+
+      // 主表
+      if(btn.dataset.kind === "pay"){
+        const id = +btn.dataset.id;
+        const type = btn.dataset.type; // Card / Cash / Trans
+        const act = btn.dataset.act;   // inc / dec
+        const p = products.find(x=>x.id===id);
+        if(!p) return;
+        const key = "qty"+type;
+        p[key] = Math.max(0, p[key] + (act==="inc" ? 1 : -1));
+        renderProducts();
+        return;
+      }
+
+      // 面額表
+      if(btn.dataset.kind === "denom"){
+        const val = +btn.dataset.val;
+        const target = btn.dataset.target; // cash / bank
+        const act = btn.dataset.act;       // inc / dec
+        const row = denomRows.find(r=>r.value===val);
+        if(!row) return;
+        const key = target === "cash" ? "cashQty" : "bankQty";
+        row[key] = Math.max(0, row[key] + (act==="inc" ? 1 : -1));
+        renderDenoms();
+        return;
+      }
+    });
+
+    // ---------- 정산：帶小計到 /settlement ----------
+    const _n = (s) => Number((s || "0").toString().replace(/,/g, "")) || 0;
+    document.getElementById("goSettlement").addEventListener("click", () => {
+      const data = {
+        sumCard:  _n(sumCardEl.textContent),
+        sumCash:  _n(sumCashEl.textContent),
+        sumTrans: _n(sumTransEl.textContent),
+        bankSum:  _n(bankSumEl.textContent),
+        cashSum:  _n(cashSumEl.textContent)
+      };
+      sessionStorage.setItem("settlementData", JSON.stringify(data));
+      window.location.href = "/settlement";
+    });
+
+    // 初始載入
+    loadPrices();
+    renderDenoms();
+  </script>
+</body>
+</html>

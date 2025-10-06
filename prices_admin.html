@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>價目表管理</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.4/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="min-h-screen bg-slate-50 p-6">
+  <div class="max-w-3xl mx-auto bg-white rounded-2xl shadow p-6">
+    <h1 class="text-2xl font-bold mb-4">價目表管理</h1>
+    <form method="post" action="/prices" class="space-y-4">
+      <div class="grid grid-cols-3 gap-3 font-semibold text-slate-600">
+        <div>序</div><div>名稱</div><div>單價</div>
+      </div>
+      {% for r in rows %}
+      <div class="grid grid-cols-3 gap-3 items-center">
+        <div>{{ r.id }}</div>
+        <input class="border rounded px-2 py-1" type="text" name="name_{{ r.id }}" value="{{ r.name }}">
+        <input class="border rounded px-2 py-1" type="number" min="0" name="price_{{ r.id }}" value="{{ r.price }}">
+      </div>
+      {% endfor %}
+      <div class="pt-4 flex items-center gap-3">
+        <a href="/checkout" class="text-slate-600 hover:underline">回結算畫面</a>
+        <button class="ml-auto bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700" type="submit">儲存</button>
+      </div>
+    </form>
+  </div>
+</body>
+</html>

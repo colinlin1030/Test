@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>정산 · 附表</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.4/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    table { border-collapse: collapse; width: 100%; font-size: 15px; }
+    th, td { border: 1px solid #e2e8f0; padding: .5rem; text-align: center; }
+    th { background-color: #f1f5f9; font-weight: 600; }
+    .btn { padding:.25rem .75rem; border:1px solid #cbd5e1; border-radius:.5rem; background-color:#f8fafc; }
+    /* 只給左欄上底色 */
+    .card-left { background-color: #d9f99d; } /* 淡綠 */
+    .bank-left { background-color: #fef9c3; } /* 淡黃 */
+    .cash-left { background-color: #fecaca; } /* 淡紅 */
+  </style>
+</head>
+<body class="min-h-screen bg-slate-50 p-6">
+  <header class="max-w-3xl mx-auto mb-4 flex justify-between items-center">
+    <h1 class="text-2xl font-bold">정산 (附表)</h1>
+    <div class="flex items-center gap-4">
+      <button id="reloadData" class="text-slate-600 hover:underline">重新載入</button>
+      <a href="/checkout" class="text-indigo-600 hover:underline">← 回結算畫面</a>
+    </div>
+  </header>
+
+  <main class="max-w-3xl mx-auto bg-white rounded-2xl shadow p-4">
+    <div class="overflow-x-auto">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:45%">항목</th>
+            <th>금액</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- 카드 계열 -->
+          <tr>
+            <td class="card-left font-semibold">카드총계</td>
+            <td>
+              <div class="flex items-center justify-center gap-2">
+                <input id="cardTotalInput" type="number" min="0"
+                       class="w-44 border rounded px-2 py-1 text-right"
+                       placeholder="숫자 입력">
+                <button id="cardTotalConfirm" class="btn">확인</button>
+              </div>
+              <div class="text-xs text-slate-500 mt-1">입력값 = 카드총계</div>
+            </td>
+          </tr>
+          <tr>
+            <td class="card-left">카드테이핑</td>
+            <td id="cardTapingVal">0</td>
+          </tr>
+          <tr>
+            <td class="card-left">카드용품</td>
+            <td id="cardSuppliesVal">0</td>
+          </tr>
+
+          <!-- 은행 계열 -->
+          <tr>
+            <td class="bank-left font-semibold">은행총계</td>
+            <td id="bankTotalVal">0</td>
+          </tr>
+          <tr>
+            <td class="bank-left">은행테이핑</td>
+            <td id="bankTapingVal">0</td>
+          </tr>
+          <tr>
+            <td class="bank-left">은행용품</td>
+            <td id="bankSuppliesVal">0</td>
+          </tr>
+
+          <!-- 현금 계열 -->
+          <tr>
+            <td class="cash-left font-semibold">현금총계</td>
+            <td id="cashTotalVal">0</td>
+          </tr>
+          <tr>
+            <td class="cash-left">현금테이핑</td>
+            <td id="cashTapingVal">0</td>
+          </tr>
+          <tr>
+            <td class="cash-left">현금용품</td>
+            <td id="cashSuppliesVal">0</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="text-sm text-slate-600 mt-4 leading-relaxed">
+      계산 규칙：카드용품＝sumCard，은행테이핑＝bankSum，은행용품＝sumTrans，
+      현금테이핑＝cashSum，현금용품＝sumCash。<br>
+      카드테이핑＝카드총계 − 카드용품 ｜ 은행총계＝은행테이핑＋은행용품 ｜ 현금총계＝현금테이핑＋현금용품
+    </p>
+  </main>
+
+  <script>
+    // 從 main.html 帶來的資料（由「정산」按鈕寫入）
+    function loadSettlementData() {
+      const saved = sessionStorage.getItem("settlementData");
+      return saved ? JSON.parse(saved) : { sumCard:0, sumCash:0, sumTrans:0, bankSum:0, cashSum:0 };
+    }
+
+    // DOM 參照
+    const cardTotalInput   = document.getElementById("cardTotalInput");
+    const cardTotalConfirm = document.getElementById("cardTotalConfirm");
+    const cardTapingVal    = document.getElementById("cardTapingVal");
+    const cardSuppliesVal  = document.getElementById("cardSuppliesVal");
+    const bankTotalVal     = document.getElementById("bankTotalVal");
+    const bankTapingVal    = document.getElementById("bankTapingVal");
+    const bankSuppliesVal  = document.getElementById("bankSuppliesVal");
+    const cashTotalVal     = document.getElementById("cashTotalVal");
+    const cashTapingVal    = document.getElementById("cashTapingVal");
+    const cashSuppliesVal  = document.getElementById("cashSuppliesVal");
+    const reloadBtn        = document.getElementById("reloadData");
+
+    // 內部狀態
+    let data = loadSettlementData();
+    let cardTotalManual = 0;
+
+    const fmt = n => (Number(n)||0).toLocaleString();
+
+    function recalc(){
+      // 來源：main.html 傳來的小計
+      const sumCard  = Number(data.sumCard)  || 0; // 主表 카드小計 → 카드용품
+      const sumCash  = Number(data.sumCash)  || 0; // 主表 현금小計 → 현금용품
+      const sumTrans = Number(data.sumTrans) || 0; // 主表 이체小計 → 은행용품
+      const bankSum  = Number(data.bankSum)  || 0; // 右側 은행小計 → 은행테이핑
+      const cashSum  = Number(data.cashSum)  || 0; // 右側 현금小計 → 현금테이핑
+
+      // 카드 계열
+      const cardSupplies = sumCard;
+      const cardTaping   = Math.max(0, (Number(cardTotalManual)||0) - cardSupplies);
+      cardSuppliesVal.textContent = fmt(cardSupplies);
+      cardTapingVal.textContent   = fmt(cardTaping);
+
+      // 은행 계열
+      const bankTaping = bankSum;
+      const bankSup    = sumTrans;
+      const bankTotal  = bankTaping + bankSup;
+      bankTapingVal.textContent   = fmt(bankTaping);
+      bankSuppliesVal.textContent = fmt(bankSup);
+      bankTotalVal.textContent    = fmt(bankTotal);
+
+      // 현금 계열
+      const cashTaping = cashSum;
+      const cashSup    = sumCash;
+      const cashTotal  = cashTaping + cashSup;
+      cashTapingVal.textContent   = fmt(cashTaping);
+      cashSuppliesVal.textContent = fmt(cashSup);
+      cashTotalVal.textContent    = fmt(cashTotal);
+    }
+
+    // 設定 카드총계
+    cardTotalConfirm.addEventListener("click", ()=>{
+      const v = parseInt(cardTotalInput.value || "0", 10);
+      cardTotalManual = isNaN(v) ? 0 : Math.max(0, v);
+      recalc();
+    });
+
+    // 重新載入 sessionStorage（若你回主頁後再回來）
+    reloadBtn.addEventListener("click", ()=>{
+      data = loadSettlementData();
+      recalc();
+    });
+
+    // 初始
+    recalc();
+  </script>
+</body>
+</html>
