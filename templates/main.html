@@ -1,13 +1,81 @@
 <!doctype html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>결산화면 · main</title>
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.4/dist/tailwind.min.css" rel="stylesheet">
   <style>
-    .btn { padding:.25rem .5rem; border:1px solid #cbd5e1; border-radius:.5rem; }
-    table { border-collapse:collapse; width:100%; }
-    th,td { border:1px solid #e2e8f0; padding:.5rem; text-align:center; }
+    /* --- 表格設定：固定欄寬 + 全部置中 --- */
+    table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+    th, td { border: 1px solid #e2e8f0; padding: .5rem; text-align: center; vertical-align: middle; }
+    th, td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* 左表欄寬 */
+    .col-name  { width: 38%; }
+    .col-price { width: 12%; }
+    .col-step  { width: 16%; } /* 3 欄各 16% -> 加起來 48% */
+
+    /* 右表欄寬 */
+    .col-denom { width: 30%; }
+    .col-cash  { width: 35%; }
+    .col-bank  { width: 35%; }
+
+    /* 數字穩定對齊：等寬數字 */
+    .num, .qty { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+    /* --- RWD：必要時允許橫向滾動，避免小螢幕擠爆 --- */
+    .table-wrap { width: 100%; overflow-x: auto; }
+
+    /* --- 自適應 stepper（填滿儲存格兩側） --- */
+    .stepper{
+      position: relative;
+      display: flex; align-items: center; justify-content: center;
+      width: 100%;
+      height: clamp(36px, 4.8vw, 44px);   /* 自適應高度 */
+      border-radius: .5rem;
+      overflow: hidden;
+      background: #f8fafc;                /* 淡灰底色，不影響數字清晰 */
+      user-select: none;
+      margin: 0 auto;
+    }
+    .stepper .half{
+      position: absolute; top: 0; bottom: 0; width: 50%;
+      transition: background-color .12s ease;
+      border: none; outline: none; box-shadow: none;
+      -webkit-appearance: none; appearance: none;
+      cursor: pointer;
+      z-index: 2;                          /* 確保可點擊 */
+    }
+    .stepper .half.left  { left: 0;  }
+    .stepper .half.right { right: 0; }
+    .stepper .half:hover  { background: #e2e8f0; } /* hover */
+    .stepper .half:active { background: #cbd5e1; } /* active */
+
+    .stepper .sym{
+      position: absolute; top: 50%; transform: translateY(-50%);
+      font-weight: 700; color: #94a3b8; opacity: .65;
+      font-size: clamp(14px, 1.6vw, 18px);
+      pointer-events: none;
+    }
+    .stepper .left  .sym { left: 12px; }
+    .stepper .right .sym { right: 12px; }
+
+    /* 中央數量：加粗、清楚、置中、跟著縮放 */
+    .qty{
+      position: relative; z-index: 3;      /* 在符號上層，但不擋點擊 */
+      font-weight: 800; color: #0f172a;
+      font-size: clamp(16px, 1.7vw, 18px);
+      min-width: 2.6rem; pointer-events: none;
+    }
+
+    /* 放 stepper 的儲存格內距，避免貼邊 */
+    .pay-cell { padding: .35rem .5rem; }
+
+    /* 小計/總計自動縮字：初始最大字級（JS 會依需要往下縮） */
+    .autoshrink { font-size: 16px; font-weight: 700; line-height: 1.2; }
+
+    /* 舊 .btn 若還在，移除邊框避免干擾（保險） */
+    .btn { border: none !important; }
   </style>
 </head>
 <body class="min-h-screen bg-slate-50 p-6">
@@ -23,28 +91,38 @@
   <div class="max-w-6xl mx-auto grid grid-cols-5 gap-4">
     <!-- 左：主表（占 4/5） -->
     <div class="col-span-5 lg:col-span-4">
-      <div class="bg-white rounded-2xl shadow p-4">
+      <div class="bg-white rounded-2xl shadow p-4 table-wrap">
         <table>
+          <!-- 固定欄寬 -->
+          <colgroup>
+            <col class="col-name">
+            <col class="col-price">
+            <col class="col-step">
+            <col class="col-step">
+            <col class="col-step">
+          </colgroup>
+
           <thead class="bg-slate-100">
             <tr>
               <th>제품명</th>
               <th>단가</th>
-              <th>카드</th>
+              <th>卡드</th>
               <th>현금</th>
               <th>이체</th>
             </tr>
           </thead>
           <tbody id="productBody"></tbody>
+
           <tfoot class="bg-slate-50 font-semibold">
             <tr>
               <td colspan="2" class="text-right pr-4">소계：</td>
-              <td id="sumCard">0</td>
-              <td id="sumCash">0</td>
-              <td id="sumTrans">0</td>
+              <td id="sumCard"  class="num autoshrink">0</td>
+              <td id="sumCash"  class="num autoshrink">0</td>
+              <td id="sumTrans" class="num autoshrink">0</td>
             </tr>
             <tr class="bg-indigo-50 text-indigo-800">
               <td colspan="2" class="text-right pr-4">총합계：</td>
-              <td colspan="3" id="sumTotal">0</td>
+              <td colspan="3" id="sumTotal" class="num autoshrink">0</td>
             </tr>
           </tfoot>
         </table>
@@ -53,32 +131,35 @@
 
     <!-- 右：20% 寬度（金額 × 現金/銀行） -->
     <aside class="col-span-5 lg:col-span-1">
-      <div class="bg-white rounded-2xl shadow p-4 lg:sticky lg:top-4">
+      <div class="bg-white rounded-2xl shadow p-4 lg:sticky lg:top-4 table-wrap">
         <h2 class="text-lg font-semibold mb-3">금액 분배</h2>
-        <div class="overflow-x-auto">
-          <table>
-            <thead class="bg-slate-100">
-              <tr>
-                <th style="width:30%"></th>
-                <th>현금</th>
-                <th>은행</th>
-              </tr>
-            </thead>
-            <tbody id="denomBody"></tbody>
-            <tfoot class="bg-slate-50 font-semibold">
-              <tr>
-                <td class="text-right pr-2">소계</td>
-                <td id="cashSum">0</td>
-                <td id="bankSum">0</td>
-              </tr>
-              <tr class="bg-indigo-50 text-indigo-800">
-                <td class="text-right pr-2">합계</td>
-                <td colspan="2" id="cashBankTotal">0</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-        <p class="text-xs text-slate-500 mt-2">좌측은 금액(₩). 각 칸: 수량 × 금액 = 소계.</p>
+        <table>
+          <colgroup>
+            <col class="col-denom">
+            <col class="col-cash">
+            <col class="col-bank">
+          </colgroup>
+          <thead class="bg-slate-100">
+            <tr>
+              <th></th>
+              <th>현금</th>
+              <th>은행</th>
+            </tr>
+          </thead>
+          <tbody id="denomBody"></tbody>
+          <tfoot class="bg-slate-50 font-semibold">
+            <tr>
+              <td class="text-right pr-2">소계</td>
+              <td id="cashSum" class="num autoshrink">0</td>
+              <td id="bankSum" class="num autoshrink">0</td>
+            </tr>
+            <tr class="bg-indigo-50 text-indigo-800">
+              <td class="text-right pr-2">합계</td>
+              <td colspan="2" id="cashBankTotal" class="num autoshrink">0</td>
+            </tr>
+          </tfoot>
+        </table>
+        <p class="text-xs text-slate-500 mt-2">좌측은 금額(₩). 各欄：數量 × 金額 = 小計。</p>
       </div>
     </aside>
   </div>
@@ -93,11 +174,11 @@
 
   <script>
     // ---------- 左表（카드/현금/이체） ----------
-    const productBody = document.getElementById("productBody");
-    const sumCardEl = document.getElementById("sumCard");
-    const sumCashEl = document.getElementById("sumCash");
-    const sumTransEl = document.getElementById("sumTrans");
-    const sumTotalEl = document.getElementById("sumTotal");
+    const productBody  = document.getElementById("productBody");
+    const sumCardEl    = document.getElementById("sumCard");
+    const sumCashEl    = document.getElementById("sumCash");
+    const sumTransEl   = document.getElementById("sumTrans");
+    const sumTotalEl   = document.getElementById("sumTotal");
     let products = [];
 
     async function loadPrices(){
@@ -123,23 +204,32 @@
         const tr = document.createElement("tr");
         tr.innerHTML = `
           <td class="font-medium">${p.name}</td>
-          <td>${p.price.toLocaleString()}</td>
-          <td>${renderPayCell(p,"Card")}</td>
-          <td>${renderPayCell(p,"Cash")}</td>
-          <td>${renderPayCell(p,"Trans")}</td>
+          <td class="num">${p.price.toLocaleString()}</td>
+          <td class="pay-cell">${renderStepperCell({ id:p.id, type:"Card",  qty:p.qtyCard,  kind:"pay" })}</td>
+          <td class="pay-cell">${renderStepperCell({ id:p.id, type:"Cash",  qty:p.qtyCash,  kind:"pay" })}</td>
+          <td class="pay-cell">${renderStepperCell({ id:p.id, type:"Trans", qty:p.qtyTrans, kind:"pay" })}</td>
         `;
         productBody.appendChild(tr);
       });
       updatePaySums();
     }
 
-    function renderPayCell(p, type){
-      const qty = p["qty"+type];
+    // 產生填滿儲存格的左右半格按鈕
+    function renderStepperCell({ id, type, qty, kind, target, val }){
+      const extras =
+        kind === "pay"
+          ? `data-id="${id}" data-type="${type}"`
+          : `data-val="${val}" data-target="${target}"`;
+
       return `
-        <div class="flex items-center justify-center gap-1">
-          <button class="btn" data-kind="pay" data-act="dec" data-id="${p.id}" data-type="${type}">－</button>
-          <span class="min-w-[2rem]">${qty}</span>
-          <button class="btn" data-kind="pay" data-act="inc" data-id="${p.id}" data-type="${type}">＋</button>
+        <div class="stepper">
+          <button type="button" class="half left"  data-kind="${kind}" data-act="dec" ${extras} aria-label="decrease">
+            <span class="sym">−</span>
+          </button>
+          <span class="qty">${qty}</span>
+          <button type="button" class="half right" data-kind="${kind}" data-act="inc" ${extras} aria-label="increase">
+            <span class="sym">＋</span>
+          </button>
         </div>
       `;
     }
@@ -155,13 +245,15 @@
       sumCashEl.textContent  = sums.Cash.toLocaleString();
       sumTransEl.textContent = sums.Trans.toLocaleString();
       sumTotalEl.textContent = (sums.Card + sums.Cash + sums.Trans).toLocaleString();
+
+      shrinkAllAutos(); // 每次更新後縮字
     }
 
     // ---------- 右表（面額 × 現金/銀行） ----------
-    const denomBody = document.getElementById("denomBody");
-    const cashSumEl = document.getElementById("cashSum");
-    const bankSumEl = document.getElementById("bankSum");
-    const cashBankTotalEl = document.getElementById("cashBankTotal");
+    const denomBody         = document.getElementById("denomBody");
+    const cashSumEl         = document.getElementById("cashSum");
+    const bankSumEl         = document.getElementById("bankSum");
+    const cashBankTotalEl   = document.getElementById("cashBankTotal");
 
     const DENOMS = [500, 1000, 2000, 4000, 5000, 10000];
     let denomRows = DENOMS.map(v => ({ value: v, cashQty: 0, bankQty: 0 }));
@@ -172,20 +264,8 @@
         const tr = document.createElement("tr");
         tr.innerHTML = `
           <td class="font-medium">${row.value.toLocaleString()}</td>
-          <td>
-            <div class="flex items-center justify-center gap-1">
-              <button class="btn" data-kind="denom" data-target="cash" data-act="dec" data-val="${row.value}">－</button>
-              <span class="min-w-[2rem]">${row.cashQty}</span>
-              <button class="btn" data-kind="denom" data-target="cash" data-act="inc" data-val="${row.value}">＋</button>
-            </div>
-          </td>
-          <td>
-            <div class="flex items-center justify-center gap-1">
-              <button class="btn" data-kind="denom" data-target="bank" data-act="dec" data-val="${row.value}">－</button>
-              <span class="min-w-[2rem]">${row.bankQty}</span>
-              <button class="btn" data-kind="denom" data-target="bank" data-act="inc" data-val="${row.value}">＋</button>
-            </div>
-          </td>
+          <td class="pay-cell">${renderStepperCell({ kind:"denom", target:"cash", val:row.value, qty:row.cashQty })}</td>
+          <td class="pay-cell">${renderStepperCell({ kind:"denom", target:"bank", val:row.value, qty:row.bankQty })}</td>
         `;
         denomBody.appendChild(tr);
       });
@@ -198,18 +278,24 @@
       cashSumEl.textContent = cashSum.toLocaleString();
       bankSumEl.textContent = bankSum.toLocaleString();
       cashBankTotalEl.textContent = (cashSum + bankSum).toLocaleString();
+
+      shrinkAllAutos(); // 每次更新後縮字
     }
 
-    // ---------- 共用事件 ----------
-    document.addEventListener("click", e=>{
-      const btn = e.target.closest("button");
-      if(!btn) return;
+    // ---------- 按鈕事件：同時支援 pointerdown（行動裝置）與 click ----------
+    function handleStepEvent(e){
+      const half = e.target.closest && e.target.closest("button.half");
+      if(!half) return;
 
-      // 主表
-      if(btn.dataset.kind === "pay"){
-        const id = +btn.dataset.id;
-        const type = btn.dataset.type; // Card / Cash / Trans
-        const act = btn.dataset.act;   // inc / dec
+      // 在 pointerdown 就先處理一次，避免某些行動裝置 click 不觸發
+      if(e.type === "pointerdown") e.preventDefault();
+
+      const act  = half.dataset.act;   // inc / dec
+      const kind = half.dataset.kind;  // pay / denom
+
+      if(kind === "pay"){
+        const id   = +half.dataset.id;
+        const type = half.dataset.type; // Card / Cash / Trans
         const p = products.find(x=>x.id===id);
         if(!p) return;
         const key = "qty"+type;
@@ -218,11 +304,9 @@
         return;
       }
 
-      // 面額表
-      if(btn.dataset.kind === "denom"){
-        const val = +btn.dataset.val;
-        const target = btn.dataset.target; // cash / bank
-        const act = btn.dataset.act;       // inc / dec
+      if(kind === "denom"){
+        const val    = +half.dataset.val;
+        const target = half.dataset.target; // cash / bank
         const row = denomRows.find(r=>r.value===val);
         if(!row) return;
         const key = target === "cash" ? "cashQty" : "bankQty";
@@ -230,6 +314,28 @@
         renderDenoms();
         return;
       }
+    }
+    document.addEventListener("pointerdown", handleStepEvent, { passive: false });
+    document.addEventListener("click", handleStepEvent);
+
+    // ---------- 自動縮字：讓 autoshrink 內容永遠塞得進去 ----------
+    function autoShrink(el, minPx = 12) {
+      const computed = getComputedStyle(el);
+      const max = parseFloat(el.dataset.max || computed.fontSize || 16);
+      let size = max;
+      el.style.fontSize = size + 'px';
+      while (el.scrollWidth > el.clientWidth && size > minPx) {
+        size -= 0.5;
+        el.style.fontSize = size + 'px';
+      }
+    }
+    function shrinkAllAutos(){
+      document.querySelectorAll('.autoshrink').forEach(el => autoShrink(el, 12));
+    }
+    let _raf;
+    window.addEventListener('resize', () => {
+      cancelAnimationFrame(_raf);
+      _raf = requestAnimationFrame(shrinkAllAutos);
     });
 
     // ---------- 정산：帶小計到 /settlement ----------
@@ -249,6 +355,7 @@
     // 初始載入
     loadPrices();
     renderDenoms();
+    window.addEventListener('load', shrinkAllAutos);
   </script>
 </body>
 </html>
