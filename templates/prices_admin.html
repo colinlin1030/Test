@@ -1,29 +1,268 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>價目表管理</title>
-  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.4/dist/tailwind.min.css" rel="stylesheet">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>價格管理</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans TC", Arial, sans-serif; margin: 16px; }
+    header { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
+    h1 { font-size: 20px; margin: 0; }
+    .note { font-size: 12px; color:#666; }
+    .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .toolbar input, .toolbar button, .toolbar select { padding:8px; font-size: 14px; }
+    .btn { padding:10px 14px; cursor:pointer; border:1px solid #ddd; background:#fff; border-radius:8px; }
+    .btn.primary { background:#111; color:#fff; border-color:#111; }
+    .btn.ghost { background:#fafafa; }
+    .status { font-size: 13px; color:#333; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #e2e2e2; padding: 8px; text-align: left; }
+    th { background: #fafafa; position: sticky; top: 0; z-index: 1; }
+    tbody tr:hover { background: #fffdf3; }
+    .right { text-align: right; }
+    .nowrap { white-space: nowrap; }
+    .pill { display:inline-block; padding:2px 8px; border:1px solid #ddd; border-radius:999px; font-size:12px; color:#555; }
+    .sku { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color:#555; }
+    .price-input { width: 120px; text-align: right; }
+    .searchbox { flex:1 1 260px; }
+    .grid { display:grid; grid-template-columns: repeat(6, 1fr); gap:8px; }
+    .grid label { font-size:12px; color:#555; display:block; }
+    .grid input, .grid textarea, .grid select { width:100%; padding:8px; font-size:14px; box-sizing:border-box; }
+    .card { border:1px solid #eee; border-radius:10px; padding:12px; background:#fff; }
+    .section-title { font-weight:600; margin: 16px 0 8px; }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
 </head>
-<body class="min-h-screen bg-slate-50 p-6">
-  <div class="max-w-3xl mx-auto bg-white rounded-2xl shadow p-6">
-    <h1 class="text-2xl font-bold mb-4">價目表管理</h1>
-    <form method="post" action="/prices" class="space-y-4">
-      <div class="grid grid-cols-3 gap-3 font-semibold text-slate-600">
-        <div>序</div><div>名稱</div><div>單價</div>
+<body>
+  <header>
+    <div>
+      <h1>價格管理</h1>
+      <div class="note">載入資料庫中所有「產品變體」的 <b>有效售價</b>。可直接編輯價格，或新增產品＋變體。</div>
+    </div>
+    <div class="toolbar">
+      <input id="q" class="searchbox" type="search" placeholder="搜尋：產品名、SKU、屬性、價格（即時）" />
+      <input id="locationId" type="number" placeholder="location_id（可空）" />
+      <input id="eventId" type="number" placeholder="event_id（可空）" />
+      <button class="btn ghost" id="btnReload" title="依條件重新載入">重新載入</button>
+      <button class="btn primary" id="btnSave">儲存變更（base_price）</button>
+    </div>
+  </header>
+
+  <!-- 新增產品＋變體 -->
+  <div class="card" style="margin-top:12px;">
+    <div class="section-title">新增產品與變體（含 base_price）</div>
+    <div class="grid">
+      <div>
+        <label>產品名稱 *</label>
+        <input id="newProductName" placeholder="例如：INSMEDIC Olympic Tape" />
       </div>
-      {% for r in rows %}
-      <div class="grid grid-cols-3 gap-3 items-center">
-        <div>{{ r.id }}</div>
-        <input class="border rounded px-2 py-1" type="text" name="name_{{ r.id }}" value="{{ r.name }}">
-        <input class="border rounded px-2 py-1" type="number" min="0" name="price_{{ r.id }}" value="{{ r.price }}">
+      <div>
+        <label>品牌</label>
+        <input id="newBrand" placeholder="例如：INSMEDIC" />
       </div>
-      {% endfor %}
-      <div class="pt-4 flex items-center gap-3">
-        <a href="/checkout" class="text-slate-600 hover:underline">回結算畫面</a>
-        <button class="ml-auto bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700" type="submit">儲存</button>
+      <div>
+        <label>SKU *</label>
+        <input id="newSku" placeholder="唯一 SKU，如 OLY-BLK-5M" />
       </div>
-    </form>
+      <div>
+        <label>屬性（JSON）</label>
+        <input id="newAttrs" placeholder='例如：{"color":"black","size":"5cm×5m"}' />
+      </div>
+      <div>
+        <label>價格（base_price）*</label>
+        <input id="newPrice" type="number" step="0.01" min="0" placeholder="例如：50000" />
+      </div>
+      <div>
+        <label>幣別</label>
+        <input id="newCurrency" placeholder="KRW" value="KRW" />
+      </div>
+    </div>
+    <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+      <button class="btn" id="btnAdd">新增</button>
+      <span class="note">※ 會同時建立 <code>product</code> 與 <code>product_variant</code>，價格寫入 <code>base_price</code>。</span>
+      <span class="status" id="addStatus"></span>
+    </div>
   </div>
+
+  <!-- 清單表格 -->
+  <div class="card" style="margin-top:12px;">
+    <table id="priceTable">
+      <thead>
+        <tr>
+          <th class="nowrap">#</th>
+          <th>產品名稱</th>
+          <th>SKU</th>
+          <th>屬性</th>
+          <th class="right">有效售價</th>
+          <th class="right">編輯（base_price）</th>
+          <th>幣別</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+      <span class="status" id="statusText"></span>
+    </div>
+  </div>
+
+  <script>
+    const $ = (s)=>document.querySelector(s);
+    const tbody = $("#tbody");
+    const q = $("#q");
+    const statusText = $("#statusText");
+    const addStatus = $("#addStatus");
+    const locationId = $("#locationId");
+    const eventId = $("#eventId");
+    const btnReload = $("#btnReload");
+    const btnSave = $("#btnSave");
+
+    // 初始自動載入
+    document.addEventListener("DOMContentLoaded", () => { reload(); });
+
+    // 重新載入（可帶 location_id / event_id）
+    btnReload.addEventListener("click", reload);
+    async function reload() {
+      const loc = locationId.value ? Number(locationId.value) : null;
+      const evt = eventId.value ? Number(eventId.value) : null;
+      const qs = new URLSearchParams();
+      if (loc) qs.set("location_id", String(loc));
+      if (evt) qs.set("event_id", String(evt));
+
+      statusText.textContent = "載入中…";
+      try {
+        const resp = await fetch(`/prices?${qs.toString()}`, { credentials: "same-origin" });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const rows = await resp.json();
+        renderRows(rows);
+        statusText.textContent = `共 ${rows.length} 筆`;
+        q.value = "";
+      } catch (e) {
+        console.error(e);
+        statusText.textContent = "載入失敗";
+      }
+    }
+
+    // 即時搜尋
+    q.addEventListener("input", ()=>{
+      const kw = q.value.trim().toLowerCase();
+      Array.from(tbody.querySelectorAll("tr")).forEach(tr => {
+        const key = tr.getAttribute("data-key") || "";
+        const visible = key.includes(kw);
+        tr.style.display = visible ? "" : "none";
+      });
+    });
+
+    // 儲存（批次更新 base_price）
+    btnSave.addEventListener("click", async ()=>{
+      const items = [];
+      tbody.querySelectorAll("tr").forEach(tr=>{
+        const variantId = Number(tr.dataset.variantId);
+        const input = tr.querySelector('input[name="price"]');
+        if (!input) return;
+        const price = Number(input.value);
+        if (Number.isFinite(variantId) && Number.isFinite(price)) {
+          items.push({ variant_id: variantId, price });
+        }
+      });
+      if (!items.length) return;
+
+      statusText.textContent = "儲存中…";
+      try {
+        const resp = await fetch("/prices", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ items })
+        });
+        const out = await resp.json();
+        if (!resp.ok || !out.ok) throw new Error(out.error || "更新失敗");
+        statusText.textContent = `已更新 ${out.updated} 筆 base_price`;
+        reload(); // 重新載入，保證畫面價格正確
+      } catch (e) {
+        console.error(e);
+        statusText.textContent = "儲存失敗";
+      }
+    });
+
+    // 新增產品＋變體＋價格
+    $("#btnAdd").addEventListener("click", async ()=>{
+      const name = $("#newProductName").value.trim();
+      const brand = $("#newBrand").value.trim();
+      const sku = $("#newSku").value.trim();
+      const attrsRaw = $("#newAttrs").value.trim();
+      const price = Number($("#newPrice").value);
+      const currency = ($("#newCurrency").value || "KRW").trim() || "KRW";
+      addStatus.textContent = "";
+
+      if (!name || !sku || !Number.isFinite(price)) {
+        addStatus.textContent = "請填必填欄位（產品名、SKU、價格）";
+        return;
+      }
+
+      // 驗證屬性 JSON
+      let attributes = null;
+      if (attrsRaw) {
+        try { attributes = JSON.parse(attrsRaw); }
+        catch { addStatus.textContent = "屬性必須是合法 JSON"; return; }
+      }
+
+      addStatus.textContent = "新增中…";
+      try {
+        const resp = await fetch("/products", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ name, brand, sku, attributes, base_price: price, currency })
+        });
+        const out = await resp.json();
+        if (!resp.ok || !out.ok) throw new Error(out.error || "新增失敗");
+        addStatus.textContent = `新增成功（product_id=${out.product_id}, variant_id=${out.variant_id}）`;
+        // 清空欄位並刷新列表
+        $("#newProductName").value = "";
+        $("#newBrand").value = "";
+        $("#newSku").value = "";
+        $("#newAttrs").value = "";
+        $("#newPrice").value = "";
+        $("#newCurrency").value = "KRW";
+        reload();
+      } catch (e) {
+        console.error(e);
+        addStatus.textContent = "新增失敗";
+      }
+    });
+
+    function renderRows(rows){
+      tbody.innerHTML = rows.map((r, i)=>{
+        const attrs = r.attributes && Object.keys(r.attributes).length
+          ? `<span class="pill">${escapeHtml(JSON.stringify(r.attributes))}</span>`
+          : `<span class="note">—</span>`;
+        const key = (r.product_name + " " + r.sku + " " + JSON.stringify(r.attributes || {}) + " " + (r.price ?? "")).toLowerCase();
+        return `
+          <tr data-key="${escapeHtml(key)}" data-variant-id="${Number(r.variant_id)}">
+            <td class="nowrap">${i+1}</td>
+            <td>${escapeHtml(r.product_name)}</td>
+            <td><span class="sku">${escapeHtml(r.sku)}</span></td>
+            <td>${attrs}</td>
+            <td class="right">${Number(r.price || 0).toFixed(2)}</td>
+            <td class="right">
+              <input class="price-input" name="price" type="number" step="0.01" min="0" value="${Number(r.price || 0).toFixed(2)}" />
+            </td>
+            <td>${escapeHtml(r.currency || "")}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    function escapeHtml(str){
+      return String(str)
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#39;");
+    }
+  </script>
 </body>
 </html>

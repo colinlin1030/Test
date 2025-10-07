@@ -183,14 +183,20 @@
 
     async function loadPrices(){
       try{
-        const res = await fetch("/prices");
+        const res = await fetch("/prices");          // 直接抓全部
         const data = await res.json();
-        products = data.slice(0,10).map(p=>({
-          id: p.id,
-          name: p.name || `제품${p.id}`,
-          price: Number(p.price)||50000,
-          qtyCard:0, qtyCash:0, qtyTrans:0
+
+        // 依新增順序排序（variant_id 由小到大）
+        data.sort((a,b) => Number(a.variant_id) - Number(b.variant_id));
+
+        // 映射到畫面使用的欄位
+        products = data.map(p => ({
+          id: Number(p.variant_id),                  // 用變體 id 當列的 id
+          name: p.product_name || `제품${p.variant_id}`,
+          price: Number(p.price) || 0,
+          qtyCard: 0, qtyCash: 0, qtyTrans: 0
         }));
+
         renderProducts();
       }catch(e){
         alert("가격표를 불러올 수 없습니다. 로그인 상태를 확인하세요.");
@@ -198,12 +204,21 @@
       }
     }
 
+
     function renderProducts(){
       productBody.innerHTML = "";
-      products.forEach(p=>{
+      products.forEach((p, i)=>{
+        const index = i + 1;
+        // 預設無色
+        let bg = "";
+        if(index === 1)                     bg = "#f1f5f9";   // 淡灰 bg-slate-100
+        else if(index >= 2 && index <= 6)   bg = "#fff1f2";   // 淡粉 bg-rose-50
+        else if(index >= 7 && index <= 12)  bg = "#f0f9ff";   // 淡藍 bg-sky-50
+        else if(index >= 13 && index <= 16) bg = "#fefce8";   // 淡黃 bg-yellow-50
+
         const tr = document.createElement("tr");
         tr.innerHTML = `
-          <td class="font-medium">${p.name}</td>
+          <td class="font-medium" style="background-color:${bg}">${p.name}</td>
           <td class="num">${p.price.toLocaleString()}</td>
           <td class="pay-cell">${renderStepperCell({ id:p.id, type:"Card",  qty:p.qtyCard,  kind:"pay" })}</td>
           <td class="pay-cell">${renderStepperCell({ id:p.id, type:"Cash",  qty:p.qtyCash,  kind:"pay" })}</td>
@@ -213,6 +228,7 @@
       });
       updatePaySums();
     }
+
 
     // 產生填滿儲存格的左右半格按鈕
     function renderStepperCell({ id, type, qty, kind, target, val }){
