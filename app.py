@@ -3,7 +3,7 @@ import os, json
 from functools import wraps
 
 app = Flask(__name__)
-app.secret_key = "change_this_to_a_random_secure_key"  # 正式環境請改
+app.secret_key = os.getenv("SECRET_KEY", "change_this_to_a_random_secure_key")  # 正式環境請改
 
 PRICE_FILE = "prices.json"
 
@@ -24,38 +24,57 @@ def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if "user" not in session:
+            # 未登入 → 去 login.html（GET /login 會回模板）
             return redirect(url_for("login", next=request.path))
         return view(*args, **kwargs)
     return wrapped
 
 # ---- routes ----
-@app.route("/")
+@app.route("/", methods=["GET"])
+@login_required
 def index():
-    # 首頁：只有一個「登入」按鈕，導向 /login
-    return render_template("index.html")
+    # 新版首頁：左上 logo、右上使用者與 로그아웃、中央 A/B/C/D
+    username = session.get("user")
+    return render_template("index.html", username=username)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    error = None
-    if request.method == "POST":
-        email = request.form.get("email", "").strip()
-        password = request.form.get("password", "")
-        if email and password:
-            session["user"] = email
-            nxt = request.args.get("next") or url_for("checkout")
-            return redirect(nxt)
-        error = "請輸入帳號與密碼"
-    return render_template("login.html", error=error)
+    """
+    GET: 回 login.html（你的前端會用 AJAX 送出）
+    POST: 支援 JSON 或 form。成功 → 200 JSON；失敗 → 401 JSON
+    """
+    if request.method == "GET":
+        return render_template("login.html")
 
-@app.route("/logout")
+    # 嘗試讀 JSON；若不是 JSON 再讀 form
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or request.form.get("username") or "").strip()
+    password = (data.get("password") or request.form.get("password") or "")
+
+    # 這裡先簡單驗證（你可改成查 DB/帳密驗證）
+    if username and password:
+        session["user"] = username
+        # 讓前端決定導去哪（你的 login.html 會導回 index.html）
+        return jsonify({"ok": True, "username": username}), 200
+
+    return jsonify({"ok": False, "error": "INVALID_CREDENTIALS"}), 401
+
+@app.route("/logout", methods=["GET"])
 def logout():
     session.pop("user", None)
+    # 按照你的需求：登出回 login.html
     return redirect(url_for("login"))
 
-@app.route("/checkout")
+# main.html（C 按鈕導向的頁面）
+@app.route("/main", methods=["GET"])
+@login_required
+def main_page():
+    return render_template("main.html")
+
+# 舊的 checkout 保留（若不再使用可移除或 redirect 到 /main）
+@app.route("/checkout", methods=["GET"])
 @login_required
 def checkout():
-    # 主結算畫面（main.html 會透過 fetch('/prices') 取得單價）
     return render_template("main.html")
 
 @app.route("/prices", methods=["GET", "POST"])
@@ -64,7 +83,7 @@ def prices():
     if request.method == "GET":
         return jsonify(load_prices())
 
-    # POST 由管理頁送進來
+    # POST：由管理頁送進來
     rows = []
     for i in range(1, 11):
         name = request.form.get(f"name_{i}") or f"產品{i}"
@@ -77,10 +96,15 @@ def prices():
     save_prices(rows)
     return redirect(url_for("prices_admin"))
 
-@app.route("/prices/admin")
+@app.route("/prices/admin", methods=["GET"])
 @login_required
 def prices_admin():
     return render_template("prices_admin.html", rows=load_prices())
+
+@app.route("/settlement", methods=["GET"])
+@login_required
+def settlement():
+    return render_template("settlement.html")
 
 # 健康檢查
 @app.route("/ping")
@@ -88,9 +112,5 @@ def ping():
     return "ok"
 
 if __name__ == "__main__":
+    # 在 Render/雲端上可改為 debug=False
     app.run(debug=True)
-
-@app.route("/settlement")
-def settlement():
-    # 如果你要限制登入才能看，也可以加上 @login_required
-    return render_template("settlement.html")
