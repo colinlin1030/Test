@@ -1,9 +1,9 @@
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify, abort
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 import os, sqlite3
 from functools import wraps
 from contextlib import closing
 import json
-
+from werkzeug.security import check_password_hash, generate_password_hash
 
 # --------------------
 # 基本設定
@@ -18,7 +18,6 @@ DB_PATH = os.getenv("DATABASE_PATH", "insmedic.db")
 def get_db():
     """
     取得 SQLite 連線；開啟外鍵；回傳 Row（可用欄位名存取）
-    每次使用後請關閉（這裡用 with closing(...) 或在 execute()/query() 內自動關）
     """
     conn = sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
     conn.row_factory = sqlite3.Row
@@ -47,27 +46,56 @@ def executemany(sql, seq_of_params):
         conn.commit()
 
 # --------------------
-# Auth decorator
+# 審計紀錄（可選）
 # --------------------
-def login_required(view):
-    @wraps(view)
-    def wrapped(*args, **kwargs):
-        if "user" not in session:
-            return redirect(url_for("login", next=request.path))
-        return view(*args, **kwargs)
-    return wrapped
+def log_action(actor_username, action, target_username=None):
+    """
+    將關鍵動作寫入 audit_logs（若表不存在會忽略錯誤）
+    """
+    try:
+        execute(
+            "INSERT INTO audit_logs (actor_username, action, target_username) VALUES (?, ?, ?);",
+            (actor_username, action, target_username)
+        )
+    except Exception:
+        pass
+
+# --------------------
+# Auth / RBAC decorators
+# --------------------
+def login_required(role=None):
+    """
+    - 登入保護
+    - 若指定 role（'admin' / 'user'），則驗證 session 中的角色
+    """
+    def outer(view):
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            if "username" not in session:
+                return redirect(url_for("login", next=request.path))
+            if role and session.get("role") != role:
+                return render_template("error.html", msg="權限不足"), 403
+            return view(*args, **kwargs)
+        return wrapped
+    return outer
 
 # --------------------
 # Routes
 # --------------------
 @app.route("/", methods=["GET"])
-@login_required
+@login_required()
 def index():
-    username = session.get("user")
+    username = session.get("username")
     return render_template("index.html", username=username)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    """
+    - GET: 顯示登入頁
+    - POST: 支援 JSON 或 form，驗證 users 表（username, password_hash, role, is_active）
+    期望 users 表：
+      id, username UNIQUE, password_hash, role IN ('admin','user'), is_active INT
+    """
     if request.method == "GET":
         return render_template("login.html")
 
@@ -75,45 +103,61 @@ def login():
     username = (data.get("username") or request.form.get("username") or "").strip()
     password = (data.get("password") or request.form.get("password") or "")
 
-    # 這裡先用簡單驗證；未來可改成查 DB 的 user 表
-    if username and password:
-        session["user"] = username
-        return jsonify({"ok": True, "username": username}), 200
+    if not username or not password:
+        return jsonify({"ok": False, "error": "INVALID_CREDENTIALS"}), 401
 
-    return jsonify({"ok": False, "error": "INVALID_CREDENTIALS"}), 401
+    row = query_one("SELECT username, password_hash, role, is_active FROM users WHERE username=?;", (username,))
+    if not row or not row["is_active"]:
+        return jsonify({"ok": False, "error": "INVALID_CREDENTIALS"}), 401
+
+    if not check_password_hash(row["password_hash"], password):
+        return jsonify({"ok": False, "error": "INVALID_CREDENTIALS"}), 401
+
+    # 設定 session
+    session["username"] = row["username"]
+    session["role"] = row["role"]
+
+    # 寫審計（可選）
+    log_action(row["username"], "login")
+
+    # 回傳 JSON（前端會依 role 導頁）
+    return jsonify({"ok": True, "username": row["username"], "role": row["role"]}), 200
 
 @app.route("/logout", methods=["GET"])
 def logout():
-    session.pop("user", None)
+    actor = session.get("username")
+    session.pop("username", None)
+    session.pop("role", None)
+    if actor:
+        log_action(actor, "logout")
     return redirect(url_for("login"))
 
-# 你的頁面
+# 頁面
 @app.route("/main", methods=["GET"])
-@login_required
+@login_required()
 def main_page():
     return render_template("main.html")
 
 @app.route("/checkout", methods=["GET"])
-@login_required
+@login_required()
 def checkout():
     return render_template("main.html")
 
 @app.route("/settlement", methods=["GET"])
-@login_required
+@login_required()
 def settlement():
     return render_template("settlement.html")
 
 # --------------------
-# Prices：改為讀 DB 的 Product / ProductVariant / (可選)VariantPriceOverride
+# Prices：讀取 Product / ProductVariant / (可選)VariantPriceOverride
 # --------------------
 def _fetch_effective_prices(location_id=None, event_id=None):
     """
     取得「有效售價」列表：
     - 以 product_variant.base_price 為基礎
-    - 若有符合時間區間的 variant_price_override，則覆蓋（可依 location_id 或 event_id）
-    - 回傳欄位：variant_id, sku, product_name, variant_attrs, effective_price, currency
+    - 若有符合時間區間的 variant_price_override，則覆蓋
+    回傳欄位：variant_id, sku, product_name, attributes, price, currency
     """
-    # 若你已建立 VIEW variant_effective_price，可改成直接查 VIEW；這裡寫成可攜式 SQL
     sql = """
     SELECT
       pv.id               AS variant_id,
@@ -136,7 +180,6 @@ def _fetch_effective_prices(location_id=None, event_id=None):
     WHERE pv.status = 'active' AND p.status = 'active'
     ORDER BY p.name, pv.sku;
     """
-    # 為了簡化綁參，重複帶入（SQLite 不支援同名參數自動重用）
     params = (
         location_id, location_id,
         event_id, event_id,
@@ -144,9 +187,7 @@ def _fetch_effective_prices(location_id=None, event_id=None):
     )
     rows = query_all(sql, params)
 
-    # 將 JSON 文字的 attributes（若有）解成 dict；失敗就給空字串
     out = []
-    import json
     for r in rows:
         attrs = r["variant_attrs"]
         try:
@@ -164,29 +205,25 @@ def _fetch_effective_prices(location_id=None, event_id=None):
     return out
 
 @app.route("/prices", methods=["GET", "POST"])
-@login_required
+@login_required()
 def prices():
     """
-    GET：
-      可帶 ?location_id= 或 ?event_id=
-      回傳 variant 的有效售價（考慮 override）
-    POST：
-      更新 base price（管理用途）
-      - 支援 JSON：{"items":[{"variant_id":1,"price":12345.0}, ...]}
-      - 或 form：variant_id, price（多筆可重複傳）
+    GET：依 location_id / event_id 回傳有效售價
+    POST：更新 base_price（限管理員）
     """
     if request.method == "GET":
-        # 讓你在賽會頁面可帶 location_id / event_id 看臨時價
         location_id = request.args.get("location_id", type=int)
         event_id = request.args.get("event_id", type=int)
         data = _fetch_effective_prices(location_id=location_id, event_id=event_id)
         return jsonify(data)
 
-    # POST：更新 base_price
+    # POST：更新 base_price（限管理員）
+    if session.get("role") != "admin":
+        return jsonify({"ok": False, "error": "FORBIDDEN"}), 403
+
     payload = request.get_json(silent=True) or {}
     items = payload.get("items")
 
-    # 若不是 JSON，就從 form 讀單筆或多筆
     if not items:
         form_variant_id = request.form.getlist("variant_id")
         form_price = request.form.getlist("price")
@@ -201,18 +238,101 @@ def prices():
     if not items:
         return jsonify({"ok": False, "error": "NO_ITEMS"}), 400
 
-    # 執行更新
     params = [(float(it["price"]), int(it["variant_id"])) for it in items if "variant_id" in it and "price" in it]
     if not params:
         return jsonify({"ok": False, "error": "INVALID_ITEMS"}), 400
 
     executemany("UPDATE product_variant SET base_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;", params)
+    log_action(session["username"], "update_prices", target_username=None)
     return jsonify({"ok": True, "updated": len(params)}), 200
 
+# --------------------
+# 管理員使用者管理頁（去除重複定義）
+# --------------------
+@app.route("/admin")
+@login_required(role="admin")
+def admin_users():
+    conn = get_db()
+    users = conn.execute(
+        "SELECT id, username, role, is_active, created_at FROM users ORDER BY id"
+    ).fetchall()
+    conn.close()
+    return render_template("admin_users.html", users=users)
+
+# 管理員重設任一使用者密碼（不需舊密碼）
+@app.route("/admin/reset_password", methods=["POST"])
+@login_required(role="admin")
+def admin_reset_password():
+    uid = request.form.get("id", type=int)
+    new = request.form.get("new") or ""
+    if not uid or len(new) < 8:
+        return jsonify({"ok": False, "msg": "id와 새 비밀번호(8자 이상)가 필요합니다."}), 400
+
+    row = query_one("SELECT username FROM users WHERE id=?", (uid,))
+    if not row:
+        return jsonify({"ok": False, "msg": "사용자를 찾을 수 없습니다."}), 404
+
+    execute("UPDATE users SET password_hash=? WHERE id=?",
+            (generate_password_hash(new), uid))
+    log_action(session["username"], "admin_reset_password", row["username"])
+    return jsonify({"ok": True})
+
+
+@app.route("/admin/create_user", methods=["POST"])
+@login_required(role="admin")
+def create_user():
+    username = (request.form.get("username") or "").strip()
+    password = request.form.get("password") or ""
+    role = request.form.get("role") or "user"
+
+    if not username or not password or role not in ("user", "admin"):
+        return jsonify({"ok": False, "msg": "자료가 불완전합니다."}), 400
+
+    try:
+        execute(
+            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?);",
+            (username, generate_password_hash(password), role)
+        )
+        log_action(session["username"], "create_user", username)
+        return jsonify({"ok": True})
+    except sqlite3.IntegrityError:
+        return jsonify({"ok": False, "msg": "이미 존재하는 아이디입니다."}), 400
+
+@app.route("/admin/toggle_active", methods=["POST"])
+@login_required(role="admin")
+def toggle_active():
+    uid = request.form.get("id", type=int)
+    if not uid:
+        return jsonify({"ok": False, "msg": "id 필요"}), 400
+
+    row = query_one("SELECT username, is_active FROM users WHERE id=?;", (uid,))
+    if not row:
+        return jsonify({"ok": False, "msg": "사용자를 찾을 수 없습니다."}), 404
+
+    new_val = 0 if row["is_active"] else 1
+    execute("UPDATE users SET is_active=? WHERE id=?;", (new_val, uid))
+    log_action(session["username"], "toggle_active", row["username"])
+    return jsonify({"ok": True, "is_active": new_val})
+
+@app.route("/admin/change_role", methods=["POST"])
+@login_required(role="admin")
+def change_role():
+    uid = request.form.get("id", type=int)
+    role = request.form.get("role")
+    if not uid or role not in ("user", "admin"):
+        return jsonify({"ok": False, "msg": "역할이 올바르지 않습니다."}), 400
+
+    row = query_one("SELECT username FROM users WHERE id=?;", (uid,))
+    if not row:
+        return jsonify({"ok": False, "msg": "사용자를 찾을 수 없습니다."}), 404
+
+    execute("UPDATE users SET role=? WHERE id=?;", (role, uid))
+    log_action(session["username"], "change_role", row["username"])
+    return jsonify({"ok": True})
+
 @app.route("/prices/admin", methods=["GET"])
-@login_required
+@login_required(role="admin")
 def prices_admin():
-    # 直接載入目前的有效售價（不帶 location/event → 顯示 base 或全域 override）
     rows = _fetch_effective_prices()
     return render_template("prices_admin.html", rows=rows)
 
@@ -220,7 +340,7 @@ def prices_admin():
 # （可選）Inventory API：給之後 main.html 有需要時調用
 # --------------------
 @app.route("/inventory", methods=["GET"])
-@login_required
+@login_required()
 def inventory():
     """
     依地點查庫存：?location_id=1
@@ -251,15 +371,19 @@ def inventory():
         """
         rows = query_all(sql)
 
-    data = [{
-        "location_id": r["location_id"],
-        "location_name": r.get("location_name"),
-        "variant_id": r["variant_id"],
-        "sku": r["sku"],
-        "product_name": r["product_name"],
-        "qty_on_hand": float(r["qty_on_hand"] or 0),
-        "qty_reserved": float(r["qty_reserved"] or 0),
-    } for r in rows]
+    data = []
+    for r in rows:
+        keys = r.keys()
+        location_name = r["location_name"] if "location_name" in keys else None
+        data.append({
+            "location_id": r["location_id"],
+            "location_name": location_name,
+            "variant_id": r["variant_id"],
+            "sku": r["sku"],
+            "product_name": r["product_name"],
+            "qty_on_hand": float(r["qty_on_hand"] or 0),
+            "qty_reserved": float(r["qty_reserved"] or 0),
+        })
     return jsonify(data)
 
 # --------------------
@@ -267,7 +391,6 @@ def inventory():
 # --------------------
 @app.route("/ping")
 def ping():
-    # 順便檢查 DB 是否能連線
     try:
         _ = query_one("SELECT 1 AS ok;")
         return "ok"
@@ -275,30 +398,22 @@ def ping():
         return f"db-error: {e}", 500
 
 # --------------------
-# 啟動
+# 產品＆變體建立（限管理員）
 # --------------------
-if __name__ == "__main__":
-    # 在 Render/雲端可改為 debug=False
-    # 若 DB 檔不存在，提醒一下（避免 .tables 爆 "file is not a database"）
-    if not os.path.exists(DB_PATH):
-        print(f"[WARN] Database file not found: {DB_PATH}")
-        print("請先建立：sqlite3 insmedic.db \".read schema.sql\"")
-    app.run(debug=True)
-
 @app.route("/products", methods=["POST"])
-@login_required
+@login_required(role="admin")
 def create_product_and_variant():
     """
     接收 JSON：
     {
-      "name": "...",            # 產品名稱（必填）
-      "brand": "INSMEDIC",      # 選填
-      "sku": "OLY-BLK-5M",      # 變體 SKU（必填、唯一）
-      "attributes": {...},      # 選填（dict 會存成 JSON TEXT）
-      "base_price": 50000,      # 必填
-      "currency": "KRW"         # 預設 KRW
+      "name": "...",
+      "brand": "INSMEDIC",
+      "sku": "OLY-BLK-5M",
+      "attributes": {...},
+      "base_price": 50000,
+      "currency": "KRW"
     }
-    建立 product 與 product_variant；若同名產品已存在，可直接重用（此處採「同名新建」策略以簡化）
+    建立 product 與 product_variant
     """
     payload = request.get_json(silent=True) or {}
     name = (payload.get("name") or "").strip()
@@ -311,7 +426,6 @@ def create_product_and_variant():
     if not name or not sku or base_price is None:
         return jsonify({"ok": False, "error": "REQUIRED_FIELDS"}), 400
 
-    # 屬性需為 JSON 可序列化
     attrs_text = None
     if attributes is not None:
         try:
@@ -319,13 +433,11 @@ def create_product_and_variant():
         except Exception:
             return jsonify({"ok": False, "error": "ATTRIBUTES_NOT_JSON"}), 400
 
-    # 建立 product
     product_id = execute(
         "INSERT INTO product (name, brand, status) VALUES (?, ?, 'active');",
         (name, brand)
     )
 
-    # 建立 variant
     try:
         variant_id = execute(
             """
@@ -337,7 +449,16 @@ def create_product_and_variant():
             (product_id, sku, attrs_text, float(base_price), currency)
         )
     except Exception as e:
-        # 例如 SKU 重複
         return jsonify({"ok": False, "error": f"VARIANT_INSERT_FAIL: {e}"}), 400
 
+    log_action(session["username"], "create_variant", target_username=None)
     return jsonify({"ok": True, "product_id": product_id, "variant_id": variant_id}), 200
+
+# --------------------
+# 啟動
+# --------------------
+if __name__ == "__main__":
+    if not os.path.exists(DB_PATH):
+        print(f"[WARN] Database file not found: {DB_PATH}")
+        print('請先建立：sqlite3 insmedic.db ".read schema.sql"')
+    app.run(debug=True)

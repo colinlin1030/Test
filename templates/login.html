@@ -3,88 +3,35 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>전표 시스템</title>
+  <title>전표 시스템 | 로그인</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
   <style>
     body {
-      height: 100vh;
-      margin: 0;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      text-align: center;
+      height: 100vh; margin: 0;
+      display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;
       background: linear-gradient(180deg, #e6f0ff 0%, #ffffff 100%);
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Apple SD Gothic Neo", "Malgun Gothic", Arial, "PingFang TC", "Microsoft JhengHei", sans-serif;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans",
+                   "Apple SD Gothic Neo", "Malgun Gothic", Arial, "PingFang TC",
+                   "Microsoft JhengHei", sans-serif;
       overflow: hidden;
     }
-
-    .logo {
-      width: 30vw;
-      max-width: 360px;
-      height: auto;
-      margin-bottom: 70px;
-      opacity: 0;
-      animation: fadeIn 1s ease-in forwards;
-    }
-
-    .open-login-btn {
-      font-size: 1.2rem;
-      padding: 12px 50px;
-      border-radius: 12px;
-      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
-      opacity: 0;
-      animation: fadeIn 1s ease-in forwards;
-      animation-delay: 0.4s;
-    }
-
-    .login-card {
-      position: fixed;
-      inset: 0;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      z-index: 1000;
-    }
-
+    .logo { width: 30vw; max-width: 360px; height: auto; margin-bottom: 70px; opacity: 0; animation: fadeIn 1s ease-in forwards; }
+    .open-login-btn { font-size: 1.2rem; padding: 12px 50px; border-radius: 12px; box-shadow: 0 4px 8px rgba(0,0,0,.15); opacity: 0; animation: fadeIn 1s ease-in forwards; animation-delay: .4s; }
+    .login-card { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 1000; }
     .login-panel {
-      width: 30vw;
-      max-width: 520px;
-      min-width: 340px;
-      background: #f2f2f2;
-      border: 2px solid #555;
-      border-radius: 16px;
-      padding: 28px 26px;
-      box-shadow: 0 10px 24px rgba(0,0,0,0.18);
-      opacity: 0;
-      transform: translateY(12px);
-      transition: opacity .35s ease, transform .35s ease;
-      position: relative;
+      width: 30vw; max-width: 520px; min-width: 340px;
+      background: #f2f2f2; border: 2px solid #555; border-radius: 16px; padding: 28px 26px;
+      box-shadow: 0 10px 24px rgba(0,0,0,.18); opacity: 0; transform: translateY(12px);
+      transition: opacity .35s ease, transform .35s ease; position: relative;
     }
     .login-panel.show { opacity: 1; transform: translateY(0); }
-
     .login-title { font-weight: 700; margin-bottom: 18px; }
     .form-label { font-weight: 600; }
     .submit-btn { width: 100%; padding: 12px; border-radius: 10px; font-size: 1.05rem; }
-
-    .close-x {
-      position: absolute; top: 10px; right: 14px; font-size: 1.4rem;
-      cursor: pointer; color: #444; user-select: none;
-    }
-
-    /* 成功訊息淡入 */
-    .success-msg {
-      display: none;
-      opacity: 0;
-      transition: opacity .3s ease;
-    }
+    .close-x { position: absolute; top: 10px; right: 14px; font-size: 1.4rem; cursor: pointer; color: #444; user-select: none; }
+    .success-msg { display: none; opacity: 0; transition: opacity .3s ease; }
     .success-msg.show { display: block; opacity: 1; }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(20px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(20px);} to { opacity: 1; transform: translateY(0);} }
     @media (max-width: 576px) {
       .logo { width: 65%; max-width: 220px; margin-bottom: 40px; }
       .open-login-btn { width: 80%; font-size: 1.1rem; padding: 12px; }
@@ -94,7 +41,7 @@
 </head>
 <body>
   <!-- Logo -->
-  <img src="static/logo.png" alt="Logo" class="logo" />
+  <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo" class="logo" />
 
   <!-- 로그인主按鈕 -->
   <button class="btn btn-primary open-login-btn" id="openLogin">로그인</button>
@@ -113,11 +60,16 @@
       <form id="loginForm" autocomplete="on">
         <div class="mb-3 text-start">
           <label for="username" class="form-label">아이디</label>
-          <input type="text" class="form-control" id="username" name="username" placeholder="아이디를 입력하세요" required />
+          <input type="text" class="form-control" id="username" name="username"
+                 placeholder="아이디를 입력하세요" required autocomplete="username" />
         </div>
         <div class="mb-3 text-start">
           <label for="password" class="form-label">비밀번호</label>
-          <input type="password" class="form-control" id="password" name="password" placeholder="비밀번호를 입력하세요" required />
+          <div class="input-group">
+            <input type="password" class="form-control" id="password" name="password"
+                   placeholder="비밀번호를 입력하세요" required autocomplete="current-password" />
+            <button class="btn btn-outline-secondary" type="button" id="togglePw" aria-label="비밀번호 표시 전환">👁</button>
+          </div>
         </div>
         <button type="submit" class="btn btn-dark submit-btn" id="submitBtn">로그인</button>
         <div class="form-text mt-2 text-danger d-none" id="errorMsg">아이디 또는 비밀번호를 확인하세요.</div>
@@ -133,20 +85,29 @@
     const form      = document.getElementById('loginForm');
     const userInput = document.getElementById('username');
     const passInput = document.getElementById('password');
+    const togglePw  = document.getElementById('togglePw');
     const submitBtn = document.getElementById('submitBtn');
     const errMsg    = document.getElementById('errorMsg');
     const successMsg= document.getElementById('successMsg');
 
-    // 開啟登入方格：顯示 + 自動 focus
+    // 顯示/隱藏密碼
+    togglePw.addEventListener('click', () => {
+      const isPw = passInput.type === 'password';
+      passInput.type = isPw ? 'text' : 'password';
+      togglePw.textContent = isPw ? '🙈' : '👁';
+      passInput.focus();
+    });
+
+    // 開啟登入方格
     const openPanel = () => {
       card.style.display = 'flex';
-      void panel.offsetWidth;
+      void panel.offsetWidth;  // 觸發 reflow
       panel.classList.add('show');
       card.setAttribute('aria-hidden', 'false');
       setTimeout(() => userInput.focus(), 60);
     };
 
-    // 關閉登入方格（含淡出）
+    // 關閉登入方格
     const closePanel = () => {
       panel.classList.remove('show');
       card.setAttribute('aria-hidden', 'true');
@@ -157,12 +118,11 @@
     closeBtn.addEventListener('click', closePanel);
     card.addEventListener('click', (e) => { if (e.target === card) closePanel(); });
 
-    // 登入表單 AJAX
+    // 表單送出
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       errMsg.classList.add('d-none');
 
-      // loading 狀態
       submitBtn.disabled = true;
       const originalText = submitBtn.textContent;
       submitBtn.textContent = '로그인 중...';
@@ -173,7 +133,7 @@
           password: passInput.value
         };
 
-        const resp = await fetch('/login', {
+        const resp = await fetch('{{ url_for("login") }}', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -181,26 +141,32 @@
         });
 
         if (resp.ok) {
-          // ✅ 顯示成功訊息
-          successMsg.classList.add('show');
+          const data = await resp.json();   // { ok, username, role }
 
-          // 鎖定表單避免重送
+          successMsg.classList.add('show');
           userInput.disabled = true;
           passInput.disabled = true;
 
-          // 1) 停留 800ms 讓成功訊息可讀
-          // 2) 淡出方格 350ms
-          // 3) 導回 index.html
           setTimeout(() => {
             panel.classList.remove('show'); // 淡出
             setTimeout(() => {
               card.style.display = 'none';
-              window.location.href = '/';
+              // 依角色導頁
+              if (data.role === 'admin') {
+                window.location.href = '{{ url_for("admin_users") }}';
+              } else {
+                window.location.href = '{{ url_for("index") }}';
+              }
             }, 350);
           }, 800);
-
         } else {
-          // ❌ 錯誤處理
+          // 顯示後端錯誤訊息（若有）
+          let msg = '아이디 또는 비밀번호를 확인하세요.';
+          try {
+            const err = await resp.json();
+            if (err && err.error) msg = err.error;
+          } catch (_) {}
+          errMsg.textContent = msg;
           errMsg.classList.remove('d-none');
           submitBtn.disabled = false;
           submitBtn.textContent = originalText;
@@ -216,11 +182,9 @@
       }
     });
 
-    // Esc 取消
+    // Esc 關閉
     window.addEventListener('keydown', (e) => {
-      if (card.style.display === 'flex' && e.key === 'Escape') {
-        closePanel();
-      }
+      if (card.style.display === 'flex' && e.key === 'Escape') closePanel();
     });
   </script>
 </body>

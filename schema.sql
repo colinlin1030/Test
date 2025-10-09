@@ -223,3 +223,21 @@ LEFT JOIN variant_price_override ov
   ON ov.variant_id = v.id
   AND (ov.valid_from <= CURRENT_TIMESTAMP)
   AND (ov.valid_to IS NULL OR ov.valid_to >= CURRENT_TIMESTAMP);
+
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('admin','user')),
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 審計紀錄（可選）登入/權限變更/新增使用者等
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor_username TEXT,
+  action TEXT NOT NULL,
+  target_username TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
