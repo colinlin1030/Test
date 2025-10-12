@@ -2,10 +2,16 @@ Flask==3.0.3
 gunicorn==21.2.0
 python-dotenv==1.0.1
 ultralytics==8.3.209
-torch==2.3.1
-torchvision==0.18.1
+
+# PyTorch for Python 3.12/3.13
+torch==2.7.1
+torchvision==0.22.0
+
+# OpenCV (no GUI) + numpy 相容版本
 opencv-python-headless==4.10.0.84
 numpy==2.2.2
 pillow>=10.3.0
+
+# OCR & 假日
 easyocr==1.7.2
 holidays==0.62
