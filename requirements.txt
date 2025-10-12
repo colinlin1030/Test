@@ -1,13 +1,15 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 Flask==3.0.3
 gunicorn==21.2.0
 python-dotenv==1.0.1
 ultralytics==8.3.209
 
-# PyTorch for Python 3.12/3.13
-torch==2.7.1
+# PyTorch for Python 3.12/3.13（CPU 版）
+torch==2.7.0
 torchvision==0.22.0
 
-# OpenCV (no GUI) + numpy 相容版本
+# OpenCV（無 GUI）+ 相容的 numpy
 opencv-python-headless==4.10.0.84
 numpy==2.2.2
 pillow>=10.3.0
