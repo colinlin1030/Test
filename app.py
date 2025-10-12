@@ -1,21 +1,29 @@
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
-import os, sqlite3, re, uuid, tempfile, json
+import os, sqlite3, re, uuid, tempfile, json, base64
 from functools import wraps
 from contextlib import closing
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 from datetime import datetime, date, timedelta
 
-# 第三方
-from ultralytics import YOLO
-import holidays
+# ---- 第三方（延遲載入）----
+# 注意：不要在頂部 from ultralytics import YOLO；Render 上最常卡在這裡
 import numpy as np
-import cv2
 
 try:
-    import easyocr
+    import cv2  # 允許在這裡先試一次；失敗則設為 None，後面函式會偵測
 except Exception:
-    easyocr = None  # 延後在 get_ocr_reader() 檢查，給出清楚錯誤
+    cv2 = None
+
+try:
+    import easyocr as _easyocr  # 僅暫存名稱，實際會在 get_ocr_reader() 使用
+except Exception:
+    _easyocr = None
+
+try:
+    import holidays as _holidays
+except Exception:
+    _holidays = None
 
 # --------------------
 # 基本設定
@@ -24,21 +32,32 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "change_this_to_a_random_secure_key")  # 正式環境請改
 DB_PATH = os.getenv("DATABASE_PATH", "insmedic.db")
 
-# YOLO 模型（啟動時載入一次）
-YOLO_WEIGHTS = os.getenv("YOLO_WEIGHTS", "models/best.pt")
-try:
-    model = YOLO(YOLO_WEIGHTS)
-except Exception as _e:
-    model = None
-    print(f"[WARN] 無法載入 YOLO 權重 {YOLO_WEIGHTS}: {_e}")
-
 # 上傳限制/格式
 MAX_CONTENT_LENGTH_MB = int(os.getenv("MAX_UPLOAD_MB", "25"))
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH_MB * 1024 * 1024
 ALLOWED_IMAGE_EXT = {"jpg", "jpeg", "png", "webp", "bmp"}
 
-# 共同尺寸表（公司順序）
+# 共用尺寸表
 SIZE_LIST = [210,220,230,235,240,245,250,255,260,265,270,275,280,285,290,300,310]
+
+# YOLO 權重
+YOLO_WEIGHTS = os.getenv("YOLO_WEIGHTS", "models/best.pt")
+_YOLO_MODEL = None
+_YOLO_ERR = None
+
+def get_yolo_model():
+    """第一次用到才載入 YOLO；載入失敗會把錯存到 _YOLO_ERR。"""
+    global _YOLO_MODEL, _YOLO_ERR
+    if _YOLO_MODEL is not None or _YOLO_ERR is not None:
+        return _YOLO_MODEL
+    try:
+        from ultralytics import YOLO  # 延遲載入，避免 Render 在 import 階段失敗
+        _YOLO_MODEL = YOLO(YOLO_WEIGHTS)
+    except Exception as e:
+        _YOLO_ERR = f"YOLO load failed: {e}"
+        print("[WARN]", _YOLO_ERR)
+        _YOLO_MODEL = None
+    return _YOLO_MODEL
 
 # --------------------
 # DB helpers (SQLite)
@@ -71,7 +90,7 @@ def executemany(sql, seq_of_params):
         conn.commit()
 
 # --------------------
-# Schema / Migration（僅保留你原有需求）
+# Schema / Migration（保留原需求）
 # --------------------
 def run_bootstrap():
     with get_db() as conn:
@@ -184,12 +203,18 @@ def get_or_create_balance(username: str, leave_type_id: int, year: int):
       SELECT * FROM leave_balances WHERE username=? AND leave_type_id=? AND year=?;
     """, (username, leave_type_id, year))
 
+def _get_holidays(country_code: str, years):
+    """安全取得國定假日；若沒裝 holidays 套件就回空集合。"""
+    if _holidays is None:
+        return set()
+    try:
+        return _holidays.country_holidays(country_code, years=years)
+    except Exception:
+        return set()
+
 def compute_trip_comp_days(country_code: str, start: date, end: date):
     years = list(range(start.year, end.year + 1))
-    try:
-        hcal = holidays.country_holidays(country_code, years=years)
-    except Exception:
-        hcal = set()
+    hcal = _get_holidays(country_code, years=years)
 
     comp = 0
     take_dates = []
@@ -204,7 +229,7 @@ def compute_trip_comp_days(country_code: str, start: date, end: date):
     return comp, take_dates
 
 # --------------------
-# 價格
+# 價格（原樣）
 # --------------------
 def _fetch_effective_prices(location_id=None, event_id=None):
     sql = """
@@ -253,26 +278,33 @@ def _fetch_effective_prices(location_id=None, event_id=None):
     return out
 
 # --------------------
-# 真模型（OCR + 顏色）
+# OCR / 顏色（延遲載入）
 # --------------------
-_OCR_READER = None  # 延遲初始化單例
+_OCR_READER = None
 
 def get_ocr_reader():
     """
-    第一次用到時才建立 EasyOCR Reader。
+    第一次用到才建立 EasyOCR Reader。
     語言碼：'ch_tra'（繁中）、'ch_sim'（簡中）、'en'、'ko'。
     """
     global _OCR_READER
-    if _OCR_READER is None:
-        if easyocr is None:
-            raise RuntimeError("EasyOCR 未安裝。請先 `pip install easyocr`")
-        _OCR_READER = easyocr.Reader(['ch_tra', 'ch_sim', 'en', 'ko'], gpu=False)
+    if _OCR_READER is not None:
+        return _OCR_READER
+    if _easyocr is None:
+        raise RuntimeError("EasyOCR 未安裝。請先 `pip install easyocr`（或在 requirements.txt 加上 easyocr）")
+    _OCR_READER = _easyocr.Reader(['ch_tra', 'ch_sim', 'en', 'ko'], gpu=False)
     return _OCR_READER
 
+def _require_cv2():
+    if cv2 is None:
+        raise RuntimeError("OpenCV (cv2) 未安裝。請使用 opencv-python-headless 並固定 numpy 相容版本。")
+    return cv2
+
 def _ocr_texts_from_img(img_bgr):
-    """回傳 (大寫合併字串, 大寫片段清單)；輸入為 BGR 影像（np.ndarray）。"""
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    gray = cv2.equalizeHist(gray)
+    """回傳 (大寫合併字串, 大寫片段清單)。"""
+    _cv2 = _require_cv2()
+    gray = _cv2.cvtColor(img_bgr, _cv2.COLOR_BGR2GRAY)
+    gray = _cv2.equalizeHist(gray)
     reader = get_ocr_reader()
     results = reader.readtext(gray)
     texts = [t[1] for t in results]
@@ -281,8 +313,9 @@ def _ocr_texts_from_img(img_bgr):
 
 def _guess_color_by_hsv(img_bgr):
     """OCR 抓不到顏色時，用 HSV 粗判 Black / Silver / Orange。"""
-    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-    h, s, v = cv2.split(hsv)
+    _cv2 = _require_cv2()
+    hsv = _cv2.cvtColor(img_bgr, _cv2.COLOR_BGR2HSV)
+    h, s, v = _cv2.split(hsv)
     mean_s = float(np.mean(s))
     mean_v = float(np.mean(v))
 
@@ -290,7 +323,7 @@ def _guess_color_by_hsv(img_bgr):
         return "Black", 0.6
     if mean_s < 40 and mean_v > 170:
         return "Silver", 0.65
-    mask_orange = cv2.inRange(hsv, (10, 40, 40), (25, 255, 255))
+    mask_orange = _cv2.inRange(hsv, (10, 40, 40), (25, 255, 255))
     ratio_orange = float(np.count_nonzero(mask_orange)) / (img_bgr.shape[0]*img_bgr.shape[1] + 1e-6)
     if ratio_orange > 0.08:
         return "Orange", 0.6
@@ -309,9 +342,7 @@ def _pick_size_from_text(blob):
     return "", 0.0
 
 def infer_crop(crop_bgr):
-    """
-    僅針對單一裁切區做品牌/顏色/尺碼推論。
-    """
+    """針對單一裁切區做品牌/顏色/尺碼推論。"""
     if crop_bgr is None or crop_bgr.size == 0:
         return {"brand":"", "color":"", "size":"", "confidence":0.0}
 
@@ -319,10 +350,7 @@ def infer_crop(crop_bgr):
     try:
         blob, parts = _ocr_texts_from_img(crop_bgr)
     except Exception as e:
-        msg = str(e)
-        if "Chinese_tra" in msg:
-            msg += " ；請改用 ['ch_tra','en'] 或移除不支援的語言碼。"
-        print("[ocr error]", msg)
+        print("[ocr error]", e)
         blob, parts = "", []
 
     # 品牌
@@ -346,8 +374,11 @@ def infer_crop(crop_bgr):
 
     # 若顏色抓不到 → HSV 粗判
     color_conf_extra = 0.0
-    if not color:
-        color, color_conf_extra = _guess_color_by_hsv(crop_bgr)
+    try:
+        if not color:
+            color, color_conf_extra = _guess_color_by_hsv(crop_bgr)
+    except Exception as e:
+        print("[hsv color guess error]", e)
 
     # 信心分數
     conf = 0.35
@@ -357,49 +388,55 @@ def infer_crop(crop_bgr):
     conf += color_conf_extra * 0.3
     conf = max(0.0, min(0.98, conf))
 
-    return {
-        "brand": brand,
-        "color": color,
-        "size": size,
-        "confidence": float(round(conf, 3))
-    }
+    return {"brand": brand, "color": color, "size": size, "confidence": float(round(conf, 3))}
+
+def _imread_any(save_path: str):
+    """在容器中穩定讀檔：先用 np.fromfile+imdecode，再退回 cv2.imread。"""
+    _cv2 = _require_cv2()
+    data = np.fromfile(save_path, dtype=np.uint8)
+    img = _cv2.imdecode(data, _cv2.IMREAD_COLOR)
+    if img is None:
+        img = _cv2.imread(save_path)
+    return img
 
 def infer_image(save_path: str):
-    """
-    後備：針對整張圖做一次推論。
-    """
-    data = np.fromfile(save_path, dtype=np.uint8)
-    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
-    if img is None:
-        img = cv2.imread(save_path)
+    """整張圖做一次推論（備援）。"""
+    try:
+        img = _imread_any(save_path)
+    except Exception as e:
+        print("[imread error]", e)
+        return {"brand":"", "color":"", "size":"", "confidence":0.0}
     if img is None:
         return {"brand":"", "color":"", "size":"", "confidence":0.0}
     return infer_crop(img)
 
 # === 簡易多目標候選區（無 YOLO 的備援） ===
 def find_candidate_regions(img_path, max_regions=12):
-    data = np.fromfile(img_path, dtype=np.uint8)
-    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
-    if img is None:
-        img = cv2.imread(img_path)
+    try:
+        _cv2 = _require_cv2()
+    except Exception as e:
+        print("[cv2 missing for contours]", e)
+        return [], None
+
+    img = _imread_any(img_path)
     if img is None:
         return [], None
 
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (5,5), 0)
-    edges = cv2.Canny(gray, 60, 160)
-    edges = cv2.dilate(edges, np.ones((3,3), np.uint8), iterations=1)
+    gray = _cv2.cvtColor(img, _cv2.COLOR_BGR2GRAY)
+    gray = _cv2.GaussianBlur(gray, (5,5), 0)
+    edges = _cv2.Canny(gray, 60, 160)
+    edges = _cv2.dilate(edges, np.ones((3,3), np.uint8), iterations=1)
 
-    cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts, _ = _cv2.findContours(edges, _cv2.RETR_EXTERNAL, _cv2.CHAIN_APPROX_SIMPLE)
     H, W = img.shape[:2]
     areas = []
     for c in cnts:
-        x, y, w, h = cv2.boundingRect(c)
+        x, y, w, h = _cv2.boundingRect(c)
         area = w * h
-        if area < (H * W * 0.005):   # 過小略過
+        if area < (H * W * 0.005):
             continue
         ar = w / (h + 1e-6)
-        if not (0.6 <= ar <= 4.0):  # 過窄/過高略過
+        if not (0.6 <= ar <= 4.0):
             continue
         areas.append((area, (x, y, x + w, y + h)))
 
@@ -409,32 +446,21 @@ def find_candidate_regions(img_path, max_regions=12):
 
 # === YOLO 取得候選框（優先） ===
 def yolo_candidate_regions(img_path, conf_thres=0.3, max_regions=20, class_filter=None):
-    """
-    使用 YOLO 權重先找可能的鞋盒標籤/LOGO 區域。
-    - class_filter: 若你的 best.pt 有特定類別代表「標籤」，可傳入類別 id 集合過濾；None = 全部保留。
-    回傳：(boxes, img_bgr)
-    boxes：[(x1,y1,x2,y2), ...]（int）
-    """
+    model = get_yolo_model()
     if model is None:
         return [], None
-
-    # 以檔案路徑直接推論（避免大圖多次 decode）
     try:
         results = model.predict(source=img_path, conf=conf_thres, verbose=False)
     except Exception as e:
         print("[yolo error]", e)
         return [], None
 
-    if not results:
+    img = _imread_any(img_path)
+    if img is None:
         return [], None
 
-    # 讀圖（供後續裁切）
-    data = np.fromfile(img_path, dtype=np.uint8)
-    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
-    if img is None:
-        img = cv2.imread(img_path)
-    if img is None:
-        return [], None
+    if not results:
+        return [], img
 
     res = results[0]
     if not hasattr(res, "boxes") or res.boxes is None:
@@ -458,7 +484,6 @@ def yolo_candidate_regions(img_path, conf_thres=0.3, max_regions=20, class_filte
             continue
         boxes.append((x1, y1, x2, y2))
 
-    # 依框面積大到小排序，保留前 max_regions
     boxes = sorted(boxes, key=lambda bb: (bb[2]-bb[0])*(bb[3]-bb[1]), reverse=True)[:max_regions]
     return boxes, img
 
@@ -535,7 +560,7 @@ def checkout():
 def settlement():
     return render_template("settlement.html")
 
-# === 新增：掃描頁 ===
+# === 掃描頁 ===
 @app.route("/scan", methods=["GET"])
 @login_required()
 def scan_page():
@@ -810,7 +835,7 @@ def api_holidays():
     code = (request.args.get("country") or "KR").upper()
     year = int(request.args.get("year") or date.today().year)
     try:
-        hcal = holidays.country_holidays(code, years=[year])
+        hcal = _get_holidays(code, years=[year])
         items = [{"title": "國定假日", "start": d.isoformat()} for d in hcal.keys()]
     except Exception:
         items = []
@@ -841,7 +866,6 @@ def api_scan():
         return jsonify({"items": []})
 
     items = []
-    import base64
 
     with tempfile.TemporaryDirectory(prefix="scan_") as tmpdir:
         for f in files:
@@ -857,20 +881,18 @@ def api_scan():
                 print("[save error]", e)
                 continue
 
-            # === 1) 優先：YOLO 找候選框 ===
+            # 1) 優先：YOLO 找候選框
             try:
-                # 如你的 best.pt 有特定類別對應「標籤」，可設定環境變數 YOLO_LABEL_CLASSES="0,3"
                 cls_filter_env = os.getenv("YOLO_LABEL_CLASSES", "").strip()
                 cls_filter = None
                 if cls_filter_env:
                     cls_filter = set(int(x) for x in cls_filter_env.split(",") if x.strip().isdigit())
-
                 yolo_boxes, full = yolo_candidate_regions(save_path, conf_thres=0.30, max_regions=20, class_filter=cls_filter)
             except Exception as e:
                 print("[yolo pipeline error]", e)
                 yolo_boxes, full = [], None
 
-            # === 2) 備援：輪廓法 ===
+            # 2) 備援：輪廓法
             if (not yolo_boxes) or (full is None):
                 try:
                     boxes, full = find_candidate_regions(save_path)
@@ -880,7 +902,7 @@ def api_scan():
             else:
                 boxes = yolo_boxes
 
-            # === 3) 如果還是沒有候選框 → 整張圖分析一次 ===
+            # 3) 若沒有候選框 → 整張圖分析一次
             if not boxes or full is None:
                 try:
                     pred = infer_image(save_path)
@@ -899,16 +921,22 @@ def api_scan():
                 })
                 continue
 
-            # === 4) 對每個候選框做 OCR + 顏色/尺碼 ===
+            # 4) 對每個候選框做 OCR + 顏色/尺碼
+            _cv2 = cv2  # 可能為 None；下面會防呆
             for i, b in enumerate(boxes):
                 x1, y1, x2, y2 = b
                 crop = full[y1:y2, x1:x2].copy()
 
-                ok, buf = cv2.imencode(".png", crop)
-                crop_b64 = base64.b64encode(buf.tobytes()).decode("ascii") if ok else None
+                crop_b64 = None
+                try:
+                    if _cv2 is not None:
+                        ok, buf = _cv2.imencode(".png", crop)
+                        crop_b64 = base64.b64encode(buf.tobytes()).decode("ascii") if ok else None
+                except Exception as e:
+                    print("[encode crop error]", e)
 
                 try:
-                    pred = infer_crop(crop)  # ✅ 針對裁切區推論
+                    pred = infer_crop(crop)
                 except Exception as e:
                     print("[infer_crop error]", e)
                     pred = {"brand": "", "color": "", "size": "", "confidence": 0.0}
@@ -923,7 +951,9 @@ def api_scan():
                     "crop_b64": crop_b64
                 })
 
-    return jsonify({"items": items})
+    # 如果 YOLO 模型未載入成功，附上提示（不影響 200）
+    warn = _YOLO_ERR if _YOLO_ERR else None
+    return jsonify({"items": items, "warning": warn})
 
 @app.route("/api/scan/commit", methods=["POST"])
 @login_required()
@@ -931,7 +961,6 @@ def api_scan_commit():
     payload = request.get_json(silent=True) or {}
     items = payload.get("items") or []
 
-    # 這裡僅回傳統計；之後可改為寫入你的庫存表
     summary = {}
     for it in items:
         brand = str(it.get("brand") or "").upper()
@@ -1005,6 +1034,20 @@ def ping():
         return "ok"
     except Exception as e:
         return f"db-error: {e}", 500
+
+@app.route("/healthz")
+def healthz():
+    """回報依賴狀態，方便在 Render 介面檢查。"""
+    status = {
+        "python": os.environ.get("PYTHON_VERSION") or "",
+        "ultralytics_loaded": _YOLO_MODEL is not None,
+        "ultralytics_error": _YOLO_ERR,
+        "cv2_available": cv2 is not None,
+        "easyocr_available": _easyocr is not None,
+        "holidays_available": _holidays is not None,
+        "yolo_weights": YOLO_WEIGHTS,
+    }
+    return jsonify(status)
 
 # --------------------
 # 啟動
