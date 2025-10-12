@@ -1,0 +1,60 @@
+
+{% block content %}
+<div class="container py-3">
+  <h3 class="mb-3">出差審核</h3>
+
+  <div class="table-responsive">
+    <table class="table table-striped align-middle">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>申請人</th>
+          <th>地點</th>
+          <th>期間</th>
+          <th>天數</th>
+          <th>目的</th>
+          <th>狀態</th>
+          <th style="width:200px">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r['id'] }}</td>
+          <td>{{ r['username'] }}</td>
+          <td>{{ r['country'] }} / {{ r['region'] or '' }} {{ r['city'] or '' }}</td>
+          <td>{{ r['start_date'] }} ~ {{ r['end_date'] }}</td>
+          <td>{{ '%.1f'|format(r['days']) }}</td>
+          <td>{{ r['purpose'] }}</td>
+          <td>
+            <span class="badge bg-{% if r['status']=='approved' %}success{% elif r['status']=='rejected' %}danger{% else %}secondary{% endif %}">
+              {{ r['status'] }}
+            </span>
+          </td>
+          <td>
+            <div class="d-flex gap-2">
+              <form method="post" action="{{ url_for('review_trip', trip_id=r['id'], action='approve') }}">
+                <button class="btn btn-sm btn-success" {% if r['status']!='pending' %}disabled{% endif %}>通過</button>
+              </form>
+              <form method="post" action="{{ url_for('review_trip', trip_id=r['id'], action='reject') }}">
+                <button class="btn btn-sm btn-danger" {% if r['status']!='pending' %}disabled{% endif %}>駁回</button>
+              </form>
+              <form method="post" action="{{ url_for('review_trip', trip_id=r['id'], action='cancel') }}">
+                <button class="btn btn-sm btn-outline-secondary" {% if r['status']=='cancelled' %}disabled{% endif %}>取消</button>
+              </form>
+            </div>
+            {% if r['reviewer_username'] %}
+              <div class="text-muted small mt-1">審核者：{{ r['reviewer_username'] }} / {{ r['reviewed_at'] }}</div>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-warning mt-3">
+    提醒：<strong>通過</strong>時，系統會依出差國家將期間內的 <strong>週末與國定假日</strong> 換算成補休（COMP）的 <code>earned</code> 並自動入帳。
+  </div>
+</div>
+{% endblock %}

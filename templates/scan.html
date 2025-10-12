@@ -1,0 +1,453 @@
+<!-- templates/scan.html -->
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <title>AI 鞋款掃描</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .dropzone.dragover { outline: 2px dashed #2563eb; background: #eff6ff; }
+    dialog::backdrop { background: rgba(0,0,0,.45); }
+    /* 簡易可拖拽視窗 */
+    .modal-header { cursor: move; }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-800">
+  <!-- App Header -->
+  <header class="sticky top-0 z-10 bg-white/90 backdrop-blur border-b">
+    <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
+      <h1 class="text-lg font-semibold">AI 鞋款掃描</h1>
+      <div class="flex items-center gap-3 text-sm">
+        <label class="flex items-center gap-2">
+          信心度門檻
+          <input id="threshold" type="number" step="0.01" min="0" max="1" value="0.8"
+                 class="w-20 border rounded-lg px-2 py-1 text-right">
+        </label>
+        <a href="{{ url_for('index') }}" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200">首頁</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-4 py-6">
+    <!-- 上傳卡片 -->
+    <section class="bg-white rounded-3xl border shadow-sm p-5">
+      <div id="dropzone"
+        class="dropzone rounded-2xl border-2 border-dashed border-slate-300 p-8 text-center cursor-pointer">
+        <div class="mx-auto w-16 h-16 rounded-2xl bg-slate-100 flex items-center justify-center mb-3">
+          <svg viewBox="0 0 24 24" class="w-8 h-8 text-slate-500">
+            <path fill="currentColor" d="M19 13v6H5v-6H3v6a2 2 0 0 0 2 2h14a2
+            2 0 0 0 2-2v-6zm-6-9l-5 5h3v4h4V9h3z"/>
+          </svg>
+        </div>
+        <p class="text-base font-medium">拖曳圖片到此，或點擊選擇檔案</p>
+        <p class="text-xs text-slate-500">支援多張｜手機可直接拍攝鞋盒標籤與鞋面</p>
+        <div class="mt-5 flex justify-center gap-3">
+          <button id="btnChoose" class="px-4 py-2 rounded-2xl bg-slate-900 text-white">選擇檔案</button>
+          <button id="btnClear"  class="px-4 py-2 rounded-2xl bg-slate-100">清空列表</button>
+          <input id="fileInput" type="file" accept="image/*" capture="environment" multiple class="hidden">
+        </div>
+      </div>
+
+      <!-- 預覽 -->
+      <div id="preview" class="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4"></div>
+
+      <!-- 動作 -->
+      <div class="mt-6 flex items-center justify-between">
+        <div class="text-sm text-slate-600" id="scanStatus"></div>
+        <button id="btnScan" class="px-5 py-3 rounded-2xl bg-blue-600 text-white disabled:opacity-50" disabled>
+          開始掃描
+        </button>
+      </div>
+    </section>
+
+    <!-- 統計表格 -->
+    <section id="statsWrap" class="mt-8 hidden">
+      <div class="bg-white rounded-3xl border shadow-sm p-5">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-base font-semibold">統計結果</h2>
+          <button id="btnReset" class="text-sm px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200">重新掃描</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full text-sm">
+            <thead>
+              <tr class="bg-slate-100">
+                <th class="px-3 py-2 text-left">사이즈</th>
+                <th class="px-3 py-2 text-left">에어 블랙</th>
+                <th class="px-3 py-2 text-left">에어 오렌지</th>
+                <th class="px-3 py-2 text-left">에어 실버</th>
+                <th class="px-3 py-2 text-left">인스 실버</th>
+                <th class="px-3 py-2 text-left">인스 블랙</th>
+              </tr>
+            </thead>
+            <tbody id="statsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 低信度編輯 Modal -->
+  <dialog id="editDialog" class="rounded-3xl p-0 w-[min(720px,95vw)]">
+    <form method="dialog" class="p-0">
+      <div class="modal-header p-4 border-b flex items-center justify-between bg-white rounded-t-3xl">
+        <h3 class="font-semibold">人工確認（低信心）</h3>
+        <div class="text-xs text-slate-500" id="editProgress">1 / 1</div>
+      </div>
+
+      <div class="p-4 grid md:grid-cols-2 gap-4">
+        <!-- 放大檢視區 -->
+        <div class="col-span-2">
+          <div class="rounded-2xl bg-slate-100 border overflow-hidden relative h-72 md:h-80">
+            <img id="editImage" alt="preview"
+                 class="absolute inset-0 m-auto max-w-none select-none"
+                 style="transform-origin: center center; transform: translate(0px,0px) scale(1);">
+          </div>
+          <div class="mt-2 flex items-center gap-3">
+            <label class="text-xs text-slate-600">縮放</label>
+            <input id="zoomRange" type="range" min="1" max="4" value="2" step="0.1" class="w-full">
+          </div>
+          <p class="mt-1 text-xs text-slate-500">提示：拖曳圖片以定位想看的區域；使用滑桿縮放。</p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <label class="text-sm">
+            品牌
+            <select id="editBrand" class="w-full border rounded-xl px-3 py-2">
+              <option value="AIR">AIR</option>
+              <option value="INSMEDIC">INSMEDIC</option>
+            </select>
+          </label>
+          <label class="text-sm">
+            顏色
+            <select id="editColor" class="w-full border rounded-xl px-3 py-2">
+              <option value="Black">Black</option>
+              <option value="Orange">Orange</option>
+              <option value="Silver">Silver</option>
+            </select>
+          </label>
+          <label class="text-sm col-span-2">
+            尺碼
+            <select id="editSize" class="w-full border rounded-xl px-3 py-2"></select>
+          </label>
+          <label class="text-sm col-span-2">
+            備註
+            <input id="editNote" type="text" class="w-full border rounded-xl px-3 py-2" placeholder="（選填）箱號/位置…">
+          </label>
+        </div>
+      </div>
+
+      <div class="p-4 border-t flex justify-between gap-2 bg-white rounded-b-3xl">
+        <button class="px-4 py-2 rounded-xl bg-slate-100" value="cancel">取消</button>
+        <div class="flex gap-2">
+          <button id="btnPrev" class="px-4 py-2 rounded-xl bg-slate-200" value="default">上一張</button>
+          <button id="btnNext" class="px-4 py-2 rounded-xl bg-blue-600 text-white" value="default">儲存並下一張</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <template id="thumbTpl">
+    <div class="bg-white rounded-2xl border overflow-hidden">
+      <img class="thumb w-full h-28 object-cover" alt="">
+      <div class="p-2 text-xs truncate filename"></div>
+      <div class="px-2 pb-2">
+        <div class="h-2 bg-slate-100 rounded">
+          <div class="h-2 w-0 bg-blue-500 rounded progressbar"></div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <script>
+    // ======= 狀態 =======
+    const selected = [];      // {id, file, url}
+    // 後端是「每個偵測框一筆」，不是「每檔一筆」
+    let results = [];         // {filename, brand, color, size, confidence, previewUrl(dataURL或原圖), note}
+    let lowIdxQueue = [];     // 低信度索引序列
+    let lowPtr = 0;           // 目前處理到第幾張低信度
+    let dragging = false, startX=0, startY=0, imgX=0, imgY=0, scale=2;
+
+    // ======= DOM =======
+    const dropzone = document.getElementById('dropzone');
+    const fileInput= document.getElementById('fileInput');
+    const btnChoose= document.getElementById('btnChoose');
+    const btnClear = document.getElementById('btnClear');
+    const preview  = document.getElementById('preview');
+    const btnScan  = document.getElementById('btnScan');
+    const scanStatus = document.getElementById('scanStatus');
+    const thresholdInput = document.getElementById('threshold');
+
+    const editDialog = document.getElementById('editDialog');
+    const editImage  = document.getElementById('editImage');
+    const zoomRange  = document.getElementById('zoomRange');
+    const editBrand  = document.getElementById('editBrand');
+    const editColor  = document.getElementById('editColor');
+    const editSize   = document.getElementById('editSize');
+    const editNote   = document.getElementById('editNote');
+    const btnPrev    = document.getElementById('btnPrev');
+    const btnNext    = document.getElementById('btnNext');
+    const editProgress = document.getElementById('editProgress');
+
+    const statsWrap = document.getElementById('statsWrap');
+    const statsBody = document.getElementById('statsBody');
+    const btnReset  = document.getElementById('btnReset');
+
+    // ======= 尺碼（公司順序） =======
+    const SIZE_LIST = [210,220,230,235,240,245,250,255,260,265,270,275,280,285,290,300,310];
+
+    // 尺碼下拉
+    (function buildSizeOptions(){
+      editSize.innerHTML = SIZE_LIST.map(v=>`<option value="${v}">${v}</option>`).join('');
+    })();
+
+    // ======= 上傳交互 =======
+    btnChoose.addEventListener('click', ()=> fileInput.click());
+    fileInput.addEventListener('change', (e)=> addFiles(e.target.files));
+
+    ['dragenter', 'dragover'].forEach(ev=>{
+      dropzone.addEventListener(ev, e=>{ e.preventDefault(); e.stopPropagation(); dropzone.classList.add('dragover'); });
+    });
+    ['dragleave','drop'].forEach(ev=>{
+      dropzone.addEventListener(ev, e=>{ e.preventDefault(); e.stopPropagation(); dropzone.classList.remove('dragover'); });
+    });
+    dropzone.addEventListener('drop', e=> addFiles(e.dataTransfer.files));
+    dropzone.addEventListener('click', ()=> fileInput.click());
+
+    btnClear.addEventListener('click', ()=>{
+      selected.forEach(s=> URL.revokeObjectURL(s.url));
+      selected.length = 0;
+      preview.innerHTML = '';
+      btnScan.disabled = true;
+      scanStatus.textContent = '';
+      statsWrap.classList.add('hidden');
+      results = [];
+    });
+
+    function addFiles(fileList){
+      const arr = Array.from(fileList).filter(f=> f.type.startsWith('image/'));
+      const tpl = document.getElementById('thumbTpl');
+      arr.forEach(file=>{
+        const id = crypto.randomUUID();
+        const url = URL.createObjectURL(file);
+        selected.push({id, file, url});
+        const node = tpl.content.firstElementChild.cloneNode(true);
+        node.querySelector('.thumb').src = url;
+        node.querySelector('.filename').textContent = file.name;
+        node.dataset.id = id;
+        preview.appendChild(node);
+      });
+      btnScan.disabled = selected.length === 0;
+    }
+
+    // ======= 掃描 =======
+    btnScan.addEventListener('click', async ()=>{
+      if(selected.length===0) return;
+      scanStatus.textContent = '上傳與辨識中…';
+      statsWrap.classList.add('hidden');
+      results = [];
+
+      const form = new FormData();
+      selected.forEach(s=> form.append('images', s.file, s.file.name));
+      form.append('threshold', thresholdInput.value || '0.8');
+
+      try{
+        const resp = await fetch('/api/scan', { method:'POST', body: form });
+        if(!resp.ok) throw new Error('掃描失敗');
+        const data = await resp.json();
+        const th = parseFloat(thresholdInput.value || '0.8');
+
+        // ✅ 以後端回傳每個「偵測框」為單位建立 results
+        const items = Array.isArray(data.items) ? data.items : [];
+        results = items.map((it, idx)=>{
+          // 試著用 crop_b64（裁切圖）做預覽；沒有就退回原始上傳圖
+          const cropUrl = it.crop_b64 ? `data:image/png;base64,${it.crop_b64}` : '';
+          // 盡量用檔名找回本地 objectURL（若需要顯示整張）
+          const local = selected.find(s => s.file.name === it.filename);
+          const fallbackUrl = local ? local.url : '';
+
+          return {
+            filename: it.filename || local?.file?.name || `image_${idx+1}.jpg`,
+            brand: (it.brand || '').toUpperCase(),
+            color: it.color || '',
+            size: it.size || '',
+            confidence: (typeof it.confidence === 'number') ? it.confidence : null,
+            previewUrl: cropUrl || fallbackUrl, // 優先使用裁切預覽
+            note: ''
+          };
+        });
+
+        // 準備低信度序列
+        lowIdxQueue = results
+          .map((r, i)=> ({i, conf: (r.confidence==null? -1 : r.confidence)}))
+          .filter(o=> o.conf < th)
+          .map(o=> o.i);
+
+        if(lowIdxQueue.length>0){
+          lowPtr = 0;
+          openLowModal(lowIdxQueue[lowPtr]);
+        }else{
+          // 無需人工 → 直接出統計
+          renderStats();
+        }
+
+        scanStatus.textContent = `辨識完成，共 ${results.length} 筆偵測。`;
+      }catch(err){
+        console.error(err);
+        scanStatus.textContent = '發生錯誤：' + (err.message || 'unknown');
+      }
+    });
+
+    // ======= 低信度 Modal 操作 =======
+    function openLowModal(idx){
+      // 設定圖片（裁切圖優先）
+      const r = results[idx];
+      editImage.src = r.previewUrl || '';
+      imgX = 0; imgY = 0; scale = 2;
+      applyTransform();
+
+      // 帶入欄位預設
+      editBrand.value = r.brand || 'AIR';
+      editColor.value = r.color || (r.brand==='INSMEDIC' ? 'Silver' : 'Black');
+      editSize.value  = r.size || '260';
+      editNote.value  = r.note || '';
+
+      editProgress.textContent = `${lowPtr+1} / ${lowIdxQueue.length}`;
+      editDialog.showModal();
+    }
+
+    function applyTransform(){
+      editImage.style.transform = `translate(${imgX}px, ${imgY}px) scale(${scale})`;
+    }
+
+    // 拖曳定位
+    editImage.addEventListener('mousedown', e=>{
+      dragging = true; startX = e.clientX - imgX; startY = e.clientY - imgY;
+    });
+    window.addEventListener('mousemove', e=>{
+      if(!dragging) return;
+      imgX = e.clientX - startX;
+      imgY = e.clientY - startY;
+      applyTransform();
+    });
+    window.addEventListener('mouseup', ()=> dragging = false);
+
+    // 觸控
+    editImage.addEventListener('touchstart', e=>{
+      dragging = true; const t=e.touches[0];
+      startX = t.clientX - imgX; startY = t.clientY - imgY;
+    }, {passive:true});
+    editImage.addEventListener('touchmove', e=>{
+      if(!dragging) return;
+      const t=e.touches[0];
+      imgX = t.clientX - startX;
+      imgY = t.clientY - startY;
+      applyTransform();
+    }, {passive:true});
+    editImage.addEventListener('touchend', ()=> dragging = false);
+
+    // 縮放
+    zoomRange.addEventListener('input', ()=>{
+      scale = parseFloat(zoomRange.value || '2');
+      applyTransform();
+    });
+
+    // 下一張 / 上一張
+    btnNext.addEventListener('click', (e)=>{
+      e.preventDefault();
+      const idx = lowIdxQueue[lowPtr];
+      Object.assign(results[idx], {
+        brand: editBrand.value.toUpperCase(),
+        color: editColor.value,
+        size: editSize.value,
+        note: editNote.value
+      });
+
+      if(lowPtr < lowIdxQueue.length-1){
+        lowPtr++;
+        openLowModal(lowIdxQueue[lowPtr]);
+      }else{
+        editDialog.close();
+        renderStats();
+      }
+    });
+
+    btnPrev.addEventListener('click', (e)=>{
+      e.preventDefault();
+      if(lowPtr>0){
+        const idx = lowIdxQueue[lowPtr];
+        Object.assign(results[idx], {
+          brand: editBrand.value.toUpperCase(),
+          color: editColor.value,
+          size: editSize.value,
+          note: editNote.value
+        });
+        lowPtr--;
+        openLowModal(lowIdxQueue[lowPtr]);
+      }
+    });
+
+    editDialog.addEventListener('close', ()=>{
+      if(lowPtr < lowIdxQueue.length-1 && editDialog.returnValue !== 'cancel'){
+        lowPtr++;
+        openLowModal(lowIdxQueue[lowPtr]);
+      }
+    });
+
+    // ======= 統計 =======
+    function renderStats(){
+      // 建立尺寸×款式的表
+      const grid = {};
+      SIZE_LIST.forEach(sz=>{
+        grid[sz] = { airBlack:0, airOrange:0, airSilver:0, insSilver:0, insBlack:0 };
+      });
+
+      // 對應規則
+      results.forEach(r=>{
+        const sz = String(r.size||'').trim();
+        if(!SIZE_LIST.map(String).includes(sz)) return; // 非公司尺碼略過
+        const brand = (r.brand||'').toUpperCase();
+        const color = (r.color||'').toLowerCase();
+
+        if(brand==='AIR'){
+          if(color==='black') grid[sz].airBlack++;
+          else if(color==='orange') grid[sz].airOrange++;
+          else if(color==='silver') grid[sz].airSilver++;
+        }else if(brand==='INSMEDIC'){
+          if(color==='silver') grid[sz].insSilver++;
+          else if(color==='black') grid[sz].insBlack++;
+        }
+      });
+
+      // 繪表
+      statsBody.innerHTML = '';
+      SIZE_LIST.forEach(sz=>{
+        const r = grid[sz];
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="px-3 py-2">${sz}</td>
+          <td class="px-3 py-2">${r.airBlack}</td>
+          <td class="px-3 py-2">${r.airOrange}</td>
+          <td class="px-3 py-2">${r.airSilver}</td>
+          <td class="px-3 py-2">${r.insSilver}</td>
+          <td class="px-3 py-2">${r.insBlack}</td>
+        `;
+        statsBody.appendChild(tr);
+      });
+
+      statsWrap.classList.remove('hidden');
+      // 清理預覽縮圖的 objectURL（節省記憶體）
+      selected.forEach(s=> URL.revokeObjectURL(s.url));
+    }
+
+    // 重新掃描
+    btnReset.addEventListener('click', ()=>{
+      statsWrap.classList.add('hidden');
+      results = [];
+      scanStatus.textContent = '可重新選擇或拖曳圖片進行新一輪掃描。';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  </script>
+</body>
+</html>
