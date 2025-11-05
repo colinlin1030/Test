@@ -11,7 +11,7 @@ from datetime import datetime, date, timedelta
 import numpy as np
 
 try:
-    import cv2  # 允許在這裡先試一次；失敗則設為 None，後面函式會偵測
+    import cv2  # 允許在這裡先試一次；失敗則設為 None，123後面函式會偵測
 except Exception:
     cv2 = None
 
